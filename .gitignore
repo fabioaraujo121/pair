@@ -1,0 +1,6 @@
+# build output (go build ./cmd/pair drops a binary named pair at the root)
+/pair
+/dist/
+# runtime state of a pairing session inside this repo
+/.pair/
+/PAIRING.md

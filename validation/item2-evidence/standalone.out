@@ -1,0 +1,3 @@
+{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"logging":{},"tools":{"listChanged":true}},"protocolVersion":"2025-06-18","serverInfo":{"name":"pair","version":"0.0.1"}}}
+{"jsonrpc":"2.0","id":2,"result":{"ttlMs":0,"cacheScope":"public","tools":[{"description":"Sleep for N seconds and return","inputSchema":{"type":"object","properties":{"seconds":{"type":"integer","description":"number of seconds to sleep"}},"required":["seconds"],"additionalProperties":false},"name":"sleep"}]}}
+{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"slept 1s"}]}}
