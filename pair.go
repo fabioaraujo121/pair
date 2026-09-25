@@ -21,3 +21,9 @@ var PairingTemplate string
 //
 //go:embed templates/CLAUDE.md.tmpl
 var ClaudeBlockTemplate string
+
+// HammerspoonTemplate defines the global hotkeys; {{PAIR_BIN}} is replaced
+// with the binary path.
+//
+//go:embed templates/hammerspoon.lua
+var HammerspoonTemplate string

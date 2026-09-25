@@ -52,13 +52,14 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 	steps := [][]string{
 		{"new-session", "-d", "-s", s, "-n", "main", "-x", cols, "-y", lines, "-c", cfg.Root},
 		{"set-environment", "-t", s, "PAIR_SOCK", cfg.Sock},
+		{"set-environment", "-t", s, "PAIR_ROOT", cfg.Root},
 		{"set-environment", "-t", s, "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS", "0"},
 		{"split-window", "-h", "-l", "50%", "-t", s + ":0.0", "-c", cfg.Root},
 		{"split-window", "-v", "-l", "30%", "-t", s + ":0.1", "-c", cfg.Root},
 	}
 	for _, args := range steps {
-		if _, err := tmux(args...); err != nil {
-			_, _ = tmux("kill-session", "-t", "="+s)
+		if _, err := tmuxRun(args...); err != nil {
+			_, _ = tmuxRun("kill-session", "-t", "="+s)
 			return err
 		}
 	}
@@ -67,7 +68,8 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 	if _, err := os.Stat(filepath.Join(cfg.Root, "PAIRING.md")); err == nil {
 		scratch = " PAIRING.md"
 	}
-	nvimCmd := "nvim --cmd " + shellQuote("set rtp^="+pluginDir) + " --listen " + shellQuote(cfg.Sock) + scratch
+	exe, _ := os.Executable()
+	nvimCmd := "nvim --cmd " + shellQuote("set rtp^="+pluginDir) + " --cmd " + shellQuote("let g:pair_bin='"+exe+"'") + " --listen " + shellQuote(cfg.Sock) + scratch
 	tailCmd := "tail -n 40 -f " + shellQuote(log.SessionLogPath())
 	claudeCmd := "env PAIR_SOCK=" + shellQuote(cfg.Sock) + " CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0 claude" + os.Getenv("PAIR_CLAUDE_ARGS")
 
@@ -78,7 +80,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 		{"select-pane", "-t", s + ":0.0"},
 	}
 	for _, args := range keys {
-		if _, err := tmux(args...); err != nil {
+		if _, err := tmuxRun(args...); err != nil {
 			return err
 		}
 	}
@@ -89,7 +91,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 // attach from a plain terminal, and just print instructions otherwise.
 func attach(session string) error {
 	if os.Getenv("TMUX") != "" {
-		_, err := tmux("switch-client", "-t", "="+session)
+		_, err := tmuxRun("switch-client", "-t", "="+session)
 		return err
 	}
 	if !stdinIsTerminal() {
@@ -108,7 +110,7 @@ func Stop() error {
 	cfg := config.Load("")
 	if !hasSession(cfg.Session) {
 		fmt.Printf("no tmux session named %q\n", cfg.Session)
-	} else if _, err := tmux("kill-session", "-t", "="+cfg.Session); err != nil {
+	} else if _, err := tmuxRun("kill-session", "-t", "="+cfg.Session); err != nil {
 		return err
 	}
 	if !config.IsTCP(cfg.Sock) {

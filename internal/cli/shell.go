@@ -1,13 +1,18 @@
 package cli
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
 	"golang.org/x/term"
+
+	"github.com/fabioaraujo121/pair/internal/tmux"
 )
+
+// tmux and hasSession keep the call sites short.
+func tmuxRun(args ...string) (string, error) { return tmux.Run(args...) }
+func hasSession(name string) bool            { return tmux.HasSession(name) }
 
 // shellQuote wraps s in single quotes for a POSIX shell, unless it is a
 // plain word that needs none.
@@ -16,20 +21,6 @@ func shellQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}
-
-// tmux runs one tmux command and returns its trimmed output.
-func tmux(args ...string) (string, error) {
-	out, err := exec.Command("tmux", args...).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("tmux %s: %v: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func hasSession(name string) bool {
-	_, err := tmux("has-session", "-t", "="+name)
-	return err == nil
 }
 
 // stdinIsTerminal reports whether pair was started from an interactive shell.

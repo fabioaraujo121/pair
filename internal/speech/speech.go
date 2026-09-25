@@ -11,6 +11,7 @@ package speech
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -64,9 +65,22 @@ func (s *Say) Speak(ctx context.Context, text string) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if terminated(err) { // pkill say from `pair hook interrupt` / listen
+			return ErrInterrupted
+		}
 		return fmt.Errorf("%s: %v: %s", bin, err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+// terminated reports whether a process died from SIGTERM or SIGINT.
+func terminated(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	ws, ok := exitErr.Sys().(syscall.WaitStatus)
+	return ok && ws.Signaled() && (ws.Signal() == syscall.SIGTERM || ws.Signal() == syscall.SIGINT)
 }
 
 // Silent is a Speaker that speaks nothing; used when PAIR_MUTE is set and

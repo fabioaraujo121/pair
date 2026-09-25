@@ -85,12 +85,24 @@ func Init() error {
 	}
 	fmt.Printf("✓ pair.nvim installed in %s (pair start loads it automatically)\n", pluginDir)
 
+	hsPath := filepath.Join(cfg.UserDir, "hammerspoon.lua")
+	hs := strings.ReplaceAll(pair.HammerspoonTemplate, "{{PAIR_BIN}}", exe)
+	if err := os.WriteFile(hsPath, []byte(hs), 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("✓ Hammerspoon hotkeys written to %s (optional)\n", hsPath)
+
 	fmt.Printf(`
 Optional, to use pair.nvim in your own Neovim config (lazy.nvim):
 
   { dir = %q, name = "pair.nvim" },
 
-Next: run `+"`pair`"+` inside this repository to start a session.
+Optional, global hotkeys (ctrl+alt+cmd+space to talk, ctrl+alt+cmd+esc to interrupt)
+with Hammerspoon: add to ~/.hammerspoon/init.lua
+
+  dofile(os.getenv("HOME") .. "/.pair/hammerspoon.lua")
+
+Next: run `+"`pair doctor --mic`"+` once to grant microphone access, then `+"`pair`"+` to start a session.
 `, pluginDir)
 	return nil
 }

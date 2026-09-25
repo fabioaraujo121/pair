@@ -20,6 +20,8 @@ const (
 	DefaultHighlightTTL = 20
 	DefaultDiffLimit    = 200
 	DefaultAskMax       = 60
+	DefaultSilenceSecs  = "1.5" // trailing silence that ends a recording
+	DefaultSilenceLevel = "1%"  // amplitude below which sox counts silence
 
 	// MaxSockPath is the sun_path limit on macOS: nvim --listen and Go's
 	// net.Dial both refuse longer unix socket paths.
@@ -41,7 +43,9 @@ type Config struct {
 	Lang         string
 	WhisperModel string
 	AskMax       int
-	Mute         bool // PAIR_MUTE: log narrations without speaking
+	SilenceSecs  string
+	SilenceLevel string
+	Mute         bool // PAIR_MUTE: log narrations without speaking or listening
 }
 
 // Load resolves the configuration for a process running in cwd. An empty cwd
@@ -66,6 +70,8 @@ func Load(cwd string) Config {
 		Lang:         envStr("PAIR_LANG", DefaultLang),
 		WhisperModel: envStr("PAIR_WHISPER_MODEL", filepath.Join(userDir, "models", "ggml-large-v3-turbo.bin")),
 		AskMax:       envInt("PAIR_ASK_MAX", DefaultAskMax),
+		SilenceSecs:  envStr("PAIR_SILENCE_SECS", DefaultSilenceSecs),
+		SilenceLevel: envStr("PAIR_SILENCE_LEVEL", DefaultSilenceLevel),
 		Mute:         os.Getenv("PAIR_MUTE") != "",
 	}
 }

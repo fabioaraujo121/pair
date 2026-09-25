@@ -26,8 +26,11 @@ Usage:
   pair [start]       create the tmux session (Claude Code | Neovim / log) or attach to it
   pair init          write hooks and permissions to .claude/settings.json, create PAIRING.md
   pair doctor        check dependencies and configuration
+                     --fix downloads the whisper model, --mic runs the microphone test
   pair stop          kill the session and any running say/rec
-  pair hook <name>   hook handler run by Claude Code: pre_edit, post_edit, stop, prompt
+  pair hook <name>   Claude Code hooks: pre_edit, post_edit, stop, prompt
+  pair hook listen   push-to-talk: record, transcribe, type into the Claude pane
+  pair hook interrupt  stop Claude (Escape), then listen
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
   pair version
 
@@ -49,20 +52,36 @@ func main() {
 	case "init":
 		err = cli.Init()
 	case "doctor":
-		err = cli.Doctor(os.Stdout)
+		opts := cli.DoctorOptions{}
+		for _, a := range args {
+			switch a {
+			case "--fix":
+				opts.DownloadModel = true
+			case "--mic":
+				opts.MicTest = true
+			}
+		}
+		err = cli.Doctor(os.Stdout, opts)
 	case "stop":
 		err = cli.Stop()
 	case "hook":
 		if len(args) == 0 {
-			err = fmt.Errorf("usage: pair hook <pre_edit|post_edit|stop|prompt>")
-		} else {
+			err = fmt.Errorf("usage: pair hook <pre_edit|post_edit|stop|prompt|listen|interrupt>")
+			break
+		}
+		switch args[0] {
+		case "listen": // voice commands read no stdin and report failures
+			err = hook.Listen(args[1:], os.Stdout)
+		case "interrupt":
+			err = hook.Interrupt(args[1:], os.Stdout)
+		default:
 			err = hook.Run(args[0], os.Stdin)
+			// Claude Code hooks must never fail the tool call: report and exit 0.
+			if err != nil && os.Getenv("PAIR_DEBUG") != "" {
+				fmt.Fprintln(os.Stderr, "pair hook:", err)
+			}
+			return
 		}
-		// Hooks must never fail the tool call: report and exit 0.
-		if err != nil && os.Getenv("PAIR_DEBUG") != "" {
-			fmt.Fprintln(os.Stderr, "pair hook:", err)
-		}
-		return
 	case "mcp":
 		err = serveMCP(args)
 	case "version", "-v", "--version":

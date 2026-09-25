@@ -17,6 +17,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/speech"
 )
 
 type fakeSpeaker struct {
@@ -42,6 +43,20 @@ func (f *fakeSpeaker) Speak(ctx context.Context, text string) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+type fakeListener struct {
+	heard speech.Heard
+	err   error
+	calls int
+}
+
+func (f *fakeListener) Listen(ctx context.Context) (speech.Heard, error) {
+	f.calls++
+	if f.err != nil {
+		return speech.Heard{}, f.err
+	}
+	return f.heard, nil
 }
 
 type fakePointer struct {
@@ -92,11 +107,12 @@ func newTestServer(t *testing.T) (*Server, *fakeSpeaker, *fakePointer, string) {
 	sp := &fakeSpeaker{delay: 20 * time.Millisecond}
 	np := &fakePointer{}
 	s := &Server{
-		Cfg:     config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), Sock: "/nonexistent.sock"},
-		Log:     events.Open(filepath.Join(root, ".pair")),
-		Speaker: sp,
-		Nvim:    np,
-		Version: "test",
+		Cfg:      config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), Sock: "/nonexistent.sock"},
+		Log:      events.Open(filepath.Join(root, ".pair")),
+		Speaker:  sp,
+		Listener: &fakeListener{heard: speech.Heard{Text: "Solid Queue.", Seconds: 1.4, RMS: 0.1}},
+		Nvim:     np,
+		Version:  "test",
 	}
 	return s, sp, np, root
 }
@@ -190,15 +206,45 @@ func TestShowPointsAndSpeaksNote(t *testing.T) {
 	}
 }
 
-func TestAskSpeaksAndSaysNoVoiceInputYet(t *testing.T) {
-	s, sp, _, _ := newTestServer(t)
+func TestAskSpeaksThenListens(t *testing.T) {
+	s, sp, _, root := newTestServer(t)
 	sess := connect(t, s)
 	out, isErr := call(t, sess, "ask", map[string]any{"question": "Uso Sidekiq ou Solid Queue? Recomendo Solid Queue."})
-	if isErr || !strings.Contains(out, "no answer") || !strings.Contains(out, "Decisions") {
+	if isErr || out != "Solid Queue." {
 		t.Fatalf("ask = %q err=%v", out, isErr)
 	}
 	if len(sp.spoken) != 1 {
 		t.Fatalf("question not spoken: %q", sp.spoken)
+	}
+	log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log"))
+	if !strings.Contains(string(log), "? Uso Sidekiq") || !strings.Contains(string(log), "👤 Solid Queue.") {
+		t.Fatalf("session log:\n%s", log)
+	}
+	ev, _ := os.ReadFile(filepath.Join(root, ".pair", "events.jsonl"))
+	if !strings.Contains(string(ev), `"type":"ask"`) || !strings.Contains(string(ev), `"seconds":1.4`) {
+		t.Fatalf("events:\n%s", ev)
+	}
+
+	s.Listener = &fakeListener{heard: speech.Heard{Dropped: "recording is silence (rms 0.0001)"}}
+	out, isErr = call(t, sess, "ask", map[string]any{"question": "Continuo?"})
+	if isErr || out != "(no answer)" {
+		t.Fatalf("no answer: %q err=%v", out, isErr)
+	}
+	log, _ = os.ReadFile(filepath.Join(root, ".pair", "session.log"))
+	if !strings.Contains(string(log), "(no answer: recording is silence") {
+		t.Fatalf("session log after silence:\n%s", log)
+	}
+
+	s.Listener = &fakeListener{err: errors.New("rec: no such device")}
+	out, isErr = call(t, sess, "ask", map[string]any{"question": "Continuo?"})
+	if !isErr || !strings.Contains(out, "could not listen") {
+		t.Fatalf("listen failure: %q err=%v", out, isErr)
+	}
+
+	s.Listener = &fakeListener{err: speech.ErrInterrupted}
+	out, isErr = call(t, sess, "ask", map[string]any{"question": "Continuo?"})
+	if !isErr || !strings.Contains(out, "interrupted") {
+		t.Fatalf("interrupted: %q err=%v", out, isErr)
 	}
 }
 

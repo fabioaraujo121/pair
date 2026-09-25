@@ -1,8 +1,8 @@
 // Package mcpserver is `pair mcp`: the stdio MCP server Claude Code talks to
 // for narrate, show and ask.
 //
-// All speech goes through one mutex so nothing ever overlaps or records
-// while speaking. Handlers watch ctx: when the engineer presses Escape,
+// All speech and listening goes through one mutex so nothing ever overlaps
+// or records while speaking. Handlers watch ctx: when the engineer presses Escape,
 // Claude Code cancels the request, the context is cancelled within about
 // 100 ms, and the running `say` is terminated here, because Claude Code
 // never kills the server or its children.
@@ -10,6 +10,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -36,29 +37,32 @@ type Pointer interface {
 
 // Server holds the wiring for the three tools.
 type Server struct {
-	Cfg     config.Config
-	Log     *events.Log
-	Speaker speech.Speaker
-	Nvim    Pointer
-	Version string
-	Vocab   map[string]string
+	Cfg      config.Config
+	Log      *events.Log
+	Speaker  speech.Speaker
+	Listener speech.Listener
+	Nvim     Pointer
+	Version  string
+	Vocab    map[string]string
 
-	speech sync.Mutex
+	speech sync.Mutex // serializes speaking and listening: never both at once
 }
 
 // New wires the default implementations: `say`, the Neovim RPC client and
 // the event log in the repository's .pair directory.
 func New(cfg config.Config, version string) *Server {
 	var speaker speech.Speaker = speech.NewSay(cfg.Voice, cfg.Rate)
+	var listener speech.Listener = speech.NewVoiceListener(cfg)
 	if cfg.Mute {
-		speaker = speech.Silent{}
+		speaker, listener = speech.Silent{}, speech.Deaf{}
 	}
 	return &Server{
-		Cfg:     cfg,
-		Log:     events.Open(cfg.StateDir),
-		Speaker: speaker,
-		Nvim:    nvim.New(cfg.Sock),
-		Version: version,
+		Cfg:      cfg,
+		Log:      events.Open(cfg.StateDir),
+		Speaker:  speaker,
+		Listener: listener,
+		Nvim:     nvim.New(cfg.Sock),
+		Version:  version,
 	}
 }
 
@@ -93,7 +97,7 @@ func (s *Server) MCP() *mcp.Server {
 	}, s.show)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ask",
-		Description: "Ask the engineer one question aloud and wait for the spoken answer. One question per decision point, recommended option first, under 200 characters. Record the answer in PAIRING.md under Decisions.",
+		Description: "Ask the engineer one question aloud, then listen: a chime plays, the microphone records until 1.5 s of silence, and the transcript is returned (or \"(no answer)\"). One question per decision point, recommended option first, under 200 characters. Record the answer in PAIRING.md under Decisions.",
 	}, s.ask)
 	return srv
 }
@@ -167,27 +171,55 @@ func (s *Server) show(ctx context.Context, _ *mcp.CallToolRequest, in ShowInput)
 	return text(fmt.Sprintf("shown %s:%d-%d", rel, start, end)), nil, nil
 }
 
-// ask speaks the question. Recording the answer arrives in milestone 3; until
-// then the result says so explicitly instead of pretending to have listened.
+// ask speaks the question, then listens. Speaking and listening happen
+// under the same lock so the microphone never records the speaker.
 func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (*mcp.CallToolResult, any, error) {
 	if err := checkLength("ask", in.Question); err != nil {
 		return nil, nil, err
 	}
-	rec, err := s.speak(ctx, in.Question)
-	_ = s.Log.Append("ask", rec)
+	s.speech.Lock()
+	defer s.speech.Unlock()
+	rec, err := s.speakLocked(ctx, in.Question)
 	_ = s.Log.Session("? " + strings.TrimSpace(in.Question))
 	if err != nil {
+		_ = s.Log.Append("ask", rec)
 		return nil, nil, err
 	}
-	return text("(no answer: voice input is not enabled yet. Take the recommended option, say so in one narrate, and record the decision in PAIRING.md under Decisions.)"), nil, nil
+	start := time.Now()
+	heard, lerr := s.Listener.Listen(ctx)
+	rec["answer"] = heard
+	rec["listen_ms"] = time.Since(start).Milliseconds()
+	if lerr != nil {
+		if errors.Is(lerr, speech.ErrInterrupted) || ctx.Err() != nil {
+			rec["interrupted"] = true
+			_ = s.Log.Append("ask", rec)
+			_ = s.Log.Session("👤 (interrupted)")
+			return nil, nil, speech.ErrInterrupted
+		}
+		rec["error"] = lerr.Error()
+		_ = s.Log.Append("ask", rec)
+		_ = s.Log.Session("👤 (listen failed: " + lerr.Error() + ")")
+		return nil, nil, fmt.Errorf("ask: could not listen: %v", lerr)
+	}
+	_ = s.Log.Append("ask", rec)
+	if heard.Text == "" {
+		_ = s.Log.Session("👤 (no answer: " + heard.Dropped + ")")
+		return text("(no answer)"), nil, nil
+	}
+	_ = s.Log.Session("👤 " + heard.Text)
+	return text(heard.Text), nil, nil
 }
 
 // speak normalizes and speaks under the speech mutex, returning the event
 // payload to log.
 func (s *Server) speak(ctx context.Context, raw string) (map[string]any, error) {
-	spoken := speech.Normalize(raw, s.Vocab)
 	s.speech.Lock()
 	defer s.speech.Unlock()
+	return s.speakLocked(ctx, raw)
+}
+
+func (s *Server) speakLocked(ctx context.Context, raw string) (map[string]any, error) {
+	spoken := speech.Normalize(raw, s.Vocab)
 	start := time.Now()
 	err := s.Speaker.Speak(ctx, spoken)
 	rec := map[string]any{
@@ -197,9 +229,9 @@ func (s *Server) speak(ctx context.Context, raw string) (map[string]any, error) 
 		"ms":     time.Since(start).Milliseconds(),
 	}
 	if err != nil {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || errors.Is(err, speech.ErrInterrupted) {
 			rec["interrupted"] = true
-			return rec, fmt.Errorf("interrupted by the engineer")
+			return rec, speech.ErrInterrupted
 		}
 		rec["error"] = err.Error()
 		return rec, err
