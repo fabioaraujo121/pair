@@ -90,6 +90,17 @@ func Doctor(w io.Writer) error {
 		checks = append(checks, check{"tmux session", false, true, fmt.Sprintf("%q not running (start with `pair`)", cfg.Session)})
 	}
 
+	if claude, err := exec.LookPath("claude"); err == nil {
+		get := claudeCmd(claude, "mcp", "get", "pair")
+		get.Dir = cfg.Root
+		if out, err := get.CombinedOutput(); err == nil {
+			first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
+			checks = append(checks, check{"mcp server", false, true, first})
+		} else {
+			checks = append(checks, check{"mcp server", false, false, "\"pair\" not registered for this project (run `pair init`)"})
+		}
+	}
+
 	if os.Getenv("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS") != "" && os.Getenv("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS") != "0" {
 		checks = append(checks, check{"auto-background", false, false, "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS is set in your shell; pair start overrides it to 0 for the session"})
 	}

@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -11,8 +12,9 @@ import (
 )
 
 // Init prepares the current repository for pairing: hooks and permissions in
-// .claude/settings.json, a PAIRING.md scratchpad, .gitignore entries, and
-// the Neovim plugin under ~/.pair/nvim. Re-running it is safe.
+// .claude/settings.json, the pairing-mode block in CLAUDE.md, the MCP server
+// registration, a PAIRING.md scratchpad, .gitignore entries, and the Neovim
+// plugin under ~/.pair/nvim. Re-running it is safe.
 func Init() error {
 	cfg := config.Load("")
 	exe, err := os.Executable()
@@ -36,6 +38,24 @@ func Init() error {
 		return err
 	}
 	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, Stop) and MCP permissions")
+
+	claudeMD := filepath.Join(cfg.Root, "CLAUDE.md")
+	current, _ := os.ReadFile(claudeMD)
+	updated := UpsertBlock(string(current), PairingBlock(cfg.Lang))
+	if updated != string(current) {
+		if err := os.WriteFile(claudeMD, []byte(updated), 0o644); err != nil {
+			return err
+		}
+		fmt.Printf("✓ CLAUDE.md: pairing-mode block (%s) between %s markers\n", cfg.Lang, blockStart)
+	} else {
+		fmt.Println("• CLAUDE.md: pairing-mode block already up to date")
+	}
+
+	if err := registerMCP(exe, cfg.Root); err != nil {
+		fmt.Printf("! MCP server not registered: %v\n  register by hand: claude mcp add pair -- %s mcp --root %s\n", err, exe, cfg.Root)
+	} else {
+		fmt.Println("✓ MCP server \"pair\" registered for this project (claude mcp add, local scope)")
+	}
 
 	scratch := filepath.Join(cfg.Root, "PAIRING.md")
 	if _, err := os.Stat(scratch); os.IsNotExist(err) {
@@ -73,6 +93,36 @@ Optional, to use pair.nvim in your own Neovim config (lazy.nvim):
 Next: run `+"`pair`"+` inside this repository to start a session.
 `, pluginDir)
 	return nil
+}
+
+// registerMCP records the server in Claude Code's local scope for this
+// project with the absolute binary path, replacing any earlier entry.
+func registerMCP(exe, root string) error {
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		return err
+	}
+	remove := claudeCmd(claude, "mcp", "remove", "--scope", "local", "pair")
+	remove.Dir = root
+	_ = remove.Run() // absent is fine
+	add := claudeCmd(claude, "mcp", "add", "--scope", "local", "--transport", "stdio", "pair", "--", exe, "mcp", "--root", root)
+	add.Dir = root
+	if out, err := add.CombinedOutput(); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// claudeCmd builds a `claude` subcommand that works even when pair itself
+// runs inside a Claude Code session.
+func claudeCmd(claude string, args ...string) *exec.Cmd {
+	cmd := exec.Command(claude, args...)
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CLAUDECODE=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	return cmd
 }
 
 // ensureGitignore appends the given patterns when they are missing and

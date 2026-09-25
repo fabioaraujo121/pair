@@ -41,6 +41,7 @@ type Config struct {
 	Lang         string
 	WhisperModel string
 	AskMax       int
+	Mute         bool // PAIR_MUTE: log narrations without speaking
 }
 
 // Load resolves the configuration for a process running in cwd. An empty cwd
@@ -65,6 +66,7 @@ func Load(cwd string) Config {
 		Lang:         envStr("PAIR_LANG", DefaultLang),
 		WhisperModel: envStr("PAIR_WHISPER_MODEL", filepath.Join(userDir, "models", "ggml-large-v3-turbo.bin")),
 		AskMax:       envInt("PAIR_ASK_MAX", DefaultAskMax),
+		Mute:         os.Getenv("PAIR_MUTE") != "",
 	}
 }
 
