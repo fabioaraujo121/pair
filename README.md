@@ -4,7 +4,7 @@ Voice-driven pairing for Claude Code in the terminal. Claude explains what it
 is about to do out loud, points at code in Neovim, asks questions and listens
 for the answer, while you watch edits land live and can interrupt at any time.
 
-Status: milestone 3 of 5 (voice in). See `PRD.md` for the design and
+Status: milestone 4 of 5 (shared context). See `PRD.md` for the design and
 `VALIDATION.md` for what was verified against Claude Code 2.1.282 before
 building.
 
@@ -40,8 +40,16 @@ building.
   records one second to trigger the macOS microphone permission and
   reports the ambient noise level.
 
-Still to come: hand-edit awareness and scratchpad keymaps (milestone 4),
-replay and Homebrew packaging (milestone 5).
+- Claude knows what you changed by hand: after each edit Claude makes, the
+  file is snapshotted; at your next prompt, anything that differs from those
+  snapshots (edits in Neovim, new files, `PAIRING.md` notes) is injected as
+  context, bounded by `PAIR_DIFF_LIMIT` lines and reported once.
+- Point at code: select lines in Neovim and press `<leader>pp`; an optional
+  note is asked for and "Look at path:start-end: note" is typed into the
+  Claude pane (submitted when there is a note). `<leader>ps` toggles the
+  `PAIRING.md` split.
+
+Still to come: session replay and Homebrew packaging (milestone 5).
 
 ## Install (development)
 
@@ -70,6 +78,17 @@ loads it with `--cmd 'set rtp^=…'`, so no Neovim configuration is required.
 To use it from your own config, add `{ dir = "~/.pair/nvim", name = "pair.nvim" }`
 to lazy.nvim.
 
+## Keys
+
+| Where | Key | Does |
+| --- | --- | --- |
+| Neovim | `<leader>pt` | push-to-talk: record, transcribe, send to Claude |
+| Neovim | `<leader>pi` | interrupt Claude (Escape), then listen |
+| Neovim (visual) | `<leader>pp` | point Claude at the selected lines, with an optional note |
+| Neovim | `<leader>ps` | toggle the `PAIRING.md` split |
+| Claude pane | `Esc` | interrupt the turn; a running narration stops with it |
+| Anywhere (Hammerspoon) | ctrl+alt+cmd+space / esc | push-to-talk / interrupt |
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -77,6 +96,7 @@ to lazy.nvim.
 | `PAIR_SESSION` | `pair` | tmux session name |
 | `PAIR_SOCK` | `$TMPDIR/pair-<repo hash>.sock` | Neovim listen address (≤ 104 bytes, or `127.0.0.1:<port>`) |
 | `PAIR_HIGHLIGHT_TTL` | `20` | seconds before a highlight clears |
+| `PAIR_DIFF_LIMIT` | `200` | max diff lines injected at a prompt |
 | `PAIR_VOICE` | `Luciana` | `say` voice (`say -v '?'` lists them; "Luciana (Enhanced)" sounds better) |
 | `PAIR_RATE` | `190` | speech rate in words per minute |
 | `PAIR_LANG` | `pt` | language of the CLAUDE.md block and (milestone 3) of whisper |

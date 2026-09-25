@@ -38,10 +38,10 @@ func Environment(session, name string) string {
 // ClaudePane is the target of the pane running Claude Code.
 func ClaudePane(session string) string { return session + ":0.0" }
 
-// SendPrompt types text into the Claude Code pane and submits it. Literal
-// mode keeps key names and a leading dash in the text from being
-// interpreted; Enter goes in a second call, as validated.
-func SendPrompt(session, text string) error {
+// SendText types text into the Claude Code pane in literal mode (key names
+// and a leading dash in the text are not interpreted) and submits it when
+// submit is true; Enter goes in a second call, as validated.
+func SendText(session, text string, submit bool) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -49,9 +49,15 @@ func SendPrompt(session, text string) error {
 	if _, err := Run("send-keys", "-t", pane, "-l", "--", text); err != nil {
 		return err
 	}
+	if !submit {
+		return nil
+	}
 	_, err := Run("send-keys", "-t", pane, "Enter")
 	return err
 }
+
+// SendPrompt types text and submits it.
+func SendPrompt(session, text string) error { return SendText(session, text, true) }
 
 // SendEscape interrupts the running Claude Code turn. Escape, never C-c: a
 // double C-c would exit Claude Code.

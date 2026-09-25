@@ -9,6 +9,7 @@ import (
 
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
+	"github.com/fabioaraujo121/pair/internal/hook"
 )
 
 // Start creates the tmux session (Claude Code left, Neovim top right, log
@@ -35,6 +36,7 @@ func Start() error {
 	if hasSession(cfg.Session) {
 		return attach(cfg.Session)
 	}
+	hook.ResetState(cfg.StateDir) // fresh baseline for hand-edit detection
 	if err := createSession(cfg, pluginDir, log); err != nil {
 		return err
 	}
@@ -69,7 +71,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 		scratch = " PAIRING.md"
 	}
 	exe, _ := os.Executable()
-	nvimCmd := "nvim --cmd " + shellQuote("set rtp^="+pluginDir) + " --cmd " + shellQuote("let g:pair_bin='"+exe+"'") + " --listen " + shellQuote(cfg.Sock) + scratch
+	nvimCmd := "nvim --cmd " + shellQuote("set rtp^="+pluginDir) + " --cmd " + shellQuote("let g:pair_bin='"+exe+"' | let g:pair_root='"+cfg.Root+"'") + " --listen " + shellQuote(cfg.Sock) + scratch
 	tailCmd := "tail -n 40 -f " + shellQuote(log.SessionLogPath())
 	claudeCmd := "env PAIR_SOCK=" + shellQuote(cfg.Sock) + " CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0 claude" + os.Getenv("PAIR_CLAUDE_ARGS")
 

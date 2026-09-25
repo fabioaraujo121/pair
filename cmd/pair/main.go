@@ -31,6 +31,7 @@ Usage:
   pair hook <name>   Claude Code hooks: pre_edit, post_edit, stop, prompt
   pair hook listen   push-to-talk: record, transcribe, type into the Claude pane
   pair hook interrupt  stop Claude (Escape), then listen
+  pair hook point --file f --start n [--end m] [--note t]   point Claude at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
   pair version
 
@@ -66,7 +67,7 @@ func main() {
 		err = cli.Stop()
 	case "hook":
 		if len(args) == 0 {
-			err = fmt.Errorf("usage: pair hook <pre_edit|post_edit|stop|prompt|listen|interrupt>")
+			err = fmt.Errorf("usage: pair hook <pre_edit|post_edit|stop|prompt|listen|interrupt|point>")
 			break
 		}
 		switch args[0] {
@@ -74,8 +75,10 @@ func main() {
 			err = hook.Listen(args[1:], os.Stdout)
 		case "interrupt":
 			err = hook.Interrupt(args[1:], os.Stdout)
+		case "point":
+			err = hook.Point(args[1:], os.Stdout)
 		default:
-			err = hook.Run(args[0], os.Stdin)
+			err = hook.Run(args[0], os.Stdin, os.Stdout)
 			// Claude Code hooks must never fail the tool call: report and exit 0.
 			if err != nil && os.Getenv("PAIR_DEBUG") != "" {
 				fmt.Fprintln(os.Stderr, "pair hook:", err)

@@ -69,19 +69,20 @@ type Nvim interface {
 
 // Handler holds the resolved dependencies for one hook invocation.
 type Handler struct {
-	Cfg  config.Config
-	Log  *events.Log
-	Nvim Nvim
+	Cfg    config.Config
+	Log    *events.Log
+	Nvim   Nvim
+	Stdout io.Writer // hook JSON output (UserPromptSubmit)
 }
 
 // Run dispatches a hook by name.
-func Run(name string, stdin io.Reader) error {
+func Run(name string, stdin io.Reader, stdout io.Writer) error {
 	in, err := Parse(stdin)
 	if err != nil {
 		return fmt.Errorf("parse hook input: %w", err)
 	}
 	cfg := config.Load(in.CWD)
-	h := &Handler{Cfg: cfg, Log: events.Open(cfg.StateDir), Nvim: nvim.New(cfg.Sock)}
+	h := &Handler{Cfg: cfg, Log: events.Open(cfg.StateDir), Nvim: nvim.New(cfg.Sock), Stdout: stdout}
 	switch name {
 	case "pre_edit":
 		return h.PreEdit(in)
@@ -145,6 +146,13 @@ func (h *Handler) PostEdit(in *Input) error {
 			_ = h.Log.SessionRaw([]byte(diff))
 		}
 	}
+	if file != "" {
+		// Remember the file as Claude left it, so the next prompt can report
+		// only what the engineer changed on top.
+		st := loadState(h.Cfg.StateDir)
+		Snapshot(h.Cfg.StateDir, &st, file)
+		_ = saveState(h.Cfg.StateDir, st)
+	}
 	payload := map[string]any{"tool": in.ToolName, "file": file}
 	if nvErr != nil {
 		payload["nvim_error"] = nvErr.Error()
@@ -158,12 +166,6 @@ func (h *Handler) Stop(in *Input) error {
 	_ = h.Log.Append("stop", map[string]any{"session_id": in.SessionID})
 	_ = h.Log.Session("■ turn ended")
 	chime()
-	return nil
-}
-
-// Prompt will inject the engineer's hand edits as context (milestone 4).
-func (h *Handler) Prompt(in *Input) error {
-	_ = h.Log.Append("prompt", map[string]any{"chars": len(in.Prompt)})
 	return nil
 }
 

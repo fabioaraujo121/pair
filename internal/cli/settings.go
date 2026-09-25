@@ -15,11 +15,11 @@ type hookSpec struct {
 	Timeout int
 }
 
-// Only hooks that exist in this milestone are registered. MultiEdit is gone
-// from Claude Code 2.1.x, so the matcher is Edit|Write.
+// MultiEdit is gone from Claude Code 2.1.x, so the matcher is Edit|Write.
 var hookSpecs = []hookSpec{
 	{"PreToolUse", "Edit|Write", "pre_edit", 10},
 	{"PostToolUse", "Edit|Write", "post_edit", 15},
+	{"UserPromptSubmit", "", "prompt", 20}, // default for this event is 30 s; output is discarded on timeout
 	{"Stop", "", "stop", 10},
 }
 

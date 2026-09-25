@@ -37,7 +37,7 @@ func Init() error {
 	if err := os.WriteFile(settingsPath, merged, 0o644); err != nil {
 		return err
 	}
-	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, Stop) and MCP permissions")
+	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop) and MCP permissions")
 
 	claudeMD := filepath.Join(cfg.Root, "CLAUDE.md")
 	current, _ := os.ReadFile(claudeMD)
