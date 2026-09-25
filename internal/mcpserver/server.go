@@ -48,13 +48,17 @@ type Server struct {
 	speech sync.Mutex // serializes speaking and listening: never both at once
 }
 
-// New wires the default implementations: `say`, the Neovim RPC client and
-// the event log in the repository's .pair directory.
-func New(cfg config.Config, version string) *Server {
-	var speaker speech.Speaker = speech.NewSay(cfg.Voice, cfg.Rate)
-	var listener speech.Listener = speech.NewVoiceListener(cfg)
-	if cfg.Mute {
-		speaker, listener = speech.Silent{}, speech.Deaf{}
+// New wires the adapters selected by the configuration (PAIR_TTS,
+// PAIR_STT), the Neovim RPC client and the event log in the repository's
+// .pair directory.
+func New(cfg config.Config, version string) (*Server, error) {
+	speaker, err := speech.NewSpeaker(cfg)
+	if err != nil {
+		return nil, err
+	}
+	listener, err := speech.NewListener(cfg)
+	if err != nil {
+		return nil, err
 	}
 	return &Server{
 		Cfg:      cfg,
@@ -63,7 +67,7 @@ func New(cfg config.Config, version string) *Server {
 		Listener: listener,
 		Nvim:     nvim.New(cfg.Sock),
 		Version:  version,
-	}
+	}, nil
 }
 
 // NarrateInput is the argument of the narrate tool.

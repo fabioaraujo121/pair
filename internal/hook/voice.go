@@ -46,9 +46,9 @@ func Interrupt(args []string, out io.Writer) error {
 func listenAndInject(cfg config.Config, out io.Writer) error {
 	speech.KillSpeech()
 	log := events.Open(cfg.StateDir)
-	var listener speech.Listener = speech.NewVoiceListener(cfg)
-	if cfg.Mute {
-		listener = speech.Deaf{}
+	listener, err := speech.NewListener(cfg)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.AskMax+30)*time.Second)
 	defer cancel()

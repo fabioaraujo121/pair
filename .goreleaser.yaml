@@ -1,0 +1,83 @@
+# goreleaser v2. Release: git tag vX.Y.Z && git push --tags (see README, Releasing).
+version: 2
+project_name: pair
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: pair
+    main: ./cmd/pair
+    binary: pair
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: pair
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - nvim/**
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: fabioaraujo121
+    name: pair
+  draft: false
+  prerelease: auto
+
+# Homebrew: goreleaser's `brews` (formula) is deprecated since v2.10; casks
+# carry pre-built binaries and can depend on formulae.
+homebrew_casks:
+  - name: pair
+    binaries:
+      - pair
+    homepage: https://github.com/fabioaraujo121/pair
+    description: Voice-driven pairing for Claude Code in the terminal
+    license: MIT
+    directory: Casks
+    skip_upload: auto
+    repository:
+      owner: fabioaraujo121
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    dependencies:
+      - formula: whisper.cpp
+      - formula: sox
+      - formula: tmux
+      - formula: neovim
+    caveats: |
+      Recommended: brew install git-delta (pretty diffs) and
+      brew install --cask hammerspoon (global push-to-talk hotkeys).
+      whisper.cpp ships no model: run `pair doctor --fix` to download one,
+      then `pair doctor --mic` once to grant microphone access.
+      In a repository: `pair init`, then `pair`.
+    hooks:
+      post:
+        # The binary is not notarized: strip the quarantine flag so Gatekeeper
+        # lets it run.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/pair"]
+          end

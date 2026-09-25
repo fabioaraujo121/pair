@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,6 +17,9 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/hook"
 	"github.com/fabioaraujo121/pair/internal/mcpserver"
+	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/replay"
+	"github.com/fabioaraujo121/pair/internal/speech"
 )
 
 // version is set by goreleaser through -ldflags.
@@ -33,10 +38,12 @@ Usage:
   pair hook interrupt  stop Claude (Escape), then listen
   pair hook point --file f --start n [--end m] [--note t]   point Claude at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
+  pair replay [events.jsonl] [--speed N] [--mute] [--no-nvim]   play a session back
   pair version
 
 Environment: PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
-PAIR_VOICE, PAIR_RATE, PAIR_LANG, PAIR_WHISPER_MODEL, PAIR_ASK_MAX, PAIR_MUTE (see PRD.md).
+PAIR_VOICE, PAIR_RATE, PAIR_LANG, PAIR_WHISPER_MODEL, PAIR_ASK_MAX, PAIR_TTS, PAIR_STT,
+PAIR_MUTE (see README.md).
 `
 
 func main() {
@@ -87,6 +94,8 @@ func main() {
 		}
 	case "mcp":
 		err = serveMCP(args)
+	case "replay":
+		err = runReplay(args)
 	case "version", "-v", "--version":
 		fmt.Println("pair", version)
 	case "help", "-h", "--help":
@@ -114,5 +123,56 @@ func serveMCP(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return mcpserver.New(config.Load(root), version).Run(ctx, &mcp.StdioTransport{})
+	srv, err := mcpserver.New(config.Load(root), version)
+	if err != nil {
+		return err
+	}
+	return srv.Run(ctx, &mcp.StdioTransport{})
+}
+
+// runReplay plays a session log back: `pair replay [events.jsonl] [--speed N]
+// [--mute] [--no-nvim]`.
+func runReplay(args []string) error {
+	cfg := config.Load("")
+	path := filepath.Join(cfg.StateDir, "events.jsonl")
+	opts := replay.Options{Speed: 1, Out: os.Stdout}
+	mute, noNvim := cfg.Mute, false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--speed":
+			if i+1 < len(args) {
+				i++
+				fmt.Sscan(args[i], &opts.Speed)
+			}
+		case "--mute":
+			mute = true
+		case "--no-nvim":
+			noNvim = true
+		default:
+			path = args[i]
+		}
+	}
+	events, err := replay.Load(path)
+	if err != nil {
+		return err
+	}
+	if !mute {
+		if opts.Speaker, err = speech.NewSpeaker(cfg); err != nil {
+			return err
+		}
+	}
+	if !noNvim {
+		client := nvim.New(cfg.Sock)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if _, err := client.Ping(ctx); err == nil {
+			opts.Nvim = client
+		} else {
+			fmt.Fprintf(os.Stderr, "pair replay: Neovim not reachable at %s, printing jumps only\n", cfg.Sock)
+		}
+		cancel()
+	}
+	fmt.Fprintf(os.Stderr, "replaying %d events from %s at %gx\n", len(events), path, opts.Speed)
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return replay.Run(ctx, events, opts)
 }

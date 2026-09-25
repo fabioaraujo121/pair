@@ -45,7 +45,9 @@ type Config struct {
 	AskMax       int
 	SilenceSecs  string
 	SilenceLevel string
-	Mute         bool // PAIR_MUTE: log narrations without speaking or listening
+	TTS          string // PAIR_TTS: text-to-speech adapter (say)
+	STT          string // PAIR_STT: speech-to-text adapter (whisper)
+	Mute         bool   // PAIR_MUTE: log narrations without speaking or listening
 }
 
 // Load resolves the configuration for a process running in cwd. An empty cwd
@@ -72,6 +74,8 @@ func Load(cwd string) Config {
 		AskMax:       envInt("PAIR_ASK_MAX", DefaultAskMax),
 		SilenceSecs:  envStr("PAIR_SILENCE_SECS", DefaultSilenceSecs),
 		SilenceLevel: envStr("PAIR_SILENCE_LEVEL", DefaultSilenceLevel),
+		TTS:          envStr("PAIR_TTS", "say"),
+		STT:          envStr("PAIR_STT", "whisper"),
 		Mute:         os.Getenv("PAIR_MUTE") != "",
 	}
 }
