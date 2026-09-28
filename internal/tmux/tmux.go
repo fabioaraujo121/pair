@@ -68,9 +68,10 @@ func Environment(session, name string) string {
 // Pane roles, stored as PAIR_PANE_<role> in the session environment when the
 // session is created. Pane indexes depend on the layout; pane ids do not.
 const (
-	RoleClaude = "CLAUDE"
-	RoleEditor = "NVIM"
-	RoleLog    = "LOG"
+	RoleClaude   = "CLAUDE"
+	RoleEditor   = "NVIM"
+	RoleLog      = "LOG"
+	RolePresence = "PRESENCE"
 )
 
 // Pane returns the tmux target of a pane by role.
@@ -96,7 +97,7 @@ func Message(session, text string) {
 	if session == "" {
 		return
 	}
-	_, _ = Run("display-message", "-t", ClaudePane(session), "-d", "3000", text)
+	_, _ = Run("display-message", "-t", Pane(session, RoleEditor), "-d", "3000", text)
 }
 
 // States shown in the status bar, so a glance tells what is going on.
@@ -122,7 +123,7 @@ func RenderState(state, detail string) string {
 	case StateListening:
 		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause"
 	case StateAttention:
-		style, text = "fg=white,bg=red", "⚠ Claude needs you (F7)"
+		style, text = "fg=white,bg=red", "⚠ Claude needs you"
 	}
 	if detail = strings.TrimSpace(detail); detail != "" {
 		if len(detail) > 60 {
@@ -133,13 +134,92 @@ func RenderState(state, detail string) string {
 	return "#[" + style + "] " + text + " #[default]"
 }
 
-// SetState updates the session's status indicator. It is a no-op without a
-// session name, so code running outside a pair session never touches tmux.
+// StateColour is the colour that stands for a state, on the pane borders
+// and in the presence animation.
+func StateColour(state string) string {
+	switch state {
+	case StateIdle:
+		return "green"
+	case StateSpeaking:
+		return "cyan"
+	case StateAsking:
+		return "magenta"
+	case StateListening, StateAttention:
+		return "red"
+	default:
+		return "yellow"
+	}
+}
+
+// SetState updates the session's status indicator and tints every pane
+// border with the colour of the state, so the state is visible from
+// anywhere on the screen. It is a no-op without a session name, so code
+// running outside a pair session never touches tmux.
 func SetState(session, state, detail string) {
 	if session == "" {
 		return
 	}
-	_, _ = Run("set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail))
+	colour := StateColour(state)
+	_, _ = Run(
+		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail), ";",
+		"set-option", "-g", "pane-border-style", "fg="+colour, ";",
+		"set-option", "-g", "pane-active-border-style", "fg="+colour+",bold",
+	)
+}
+
+// Claude Code's pane is hidden by default: it lives in a background window
+// and is brought into the main window, under the editor, on demand.
+
+// ClaudeVisible reports whether Claude's pane is in the main window.
+func ClaudeVisible(session string) bool {
+	if session == "" {
+		return false
+	}
+	claude, err := Run("display-message", "-p", "-t", ClaudePane(session), "#{window_id}")
+	if err != nil {
+		return false
+	}
+	main, err := Run("display-message", "-p", "-t", Pane(session, RoleEditor), "#{window_id}")
+	return err == nil && claude == main
+}
+
+// ShowClaude brings Claude's pane under the editor, with the keyboard in
+// it.
+func ShowClaude(session, height string) error {
+	if session == "" || ClaudeVisible(session) {
+		return nil
+	}
+	if height == "" {
+		height = "45%"
+	}
+	claude := ClaudePane(session)
+	if _, err := Run("join-pane", "-v", "-l", height, "-s", claude, "-t", Pane(session, RoleEditor)); err != nil {
+		return err
+	}
+	_, err := Run("select-pane", "-t", claude)
+	return err
+}
+
+// HideClaude sends Claude's pane back to its background window. Claude Code
+// keeps running there.
+func HideClaude(session string) error {
+	if session == "" || !ClaudeVisible(session) {
+		return nil
+	}
+	if _, err := Run("break-pane", "-d", "-s", ClaudePane(session), "-n", "claude"); err != nil {
+		return err
+	}
+	_, err := Run("select-pane", "-t", Pane(session, RoleEditor))
+	return err
+}
+
+// ToggleClaude shows Claude's pane when it is hidden and hides it when it
+// is shown. It reports whether the pane is visible afterwards.
+func ToggleClaude(session, height string) (bool, error) {
+	if ClaudeVisible(session) {
+		return false, HideClaude(session)
+	}
+	return true, ShowClaude(session, height)
 }
 
 // SendText types text into the Claude Code pane in literal mode (key names
@@ -171,12 +251,4 @@ func SendEscape(session string) error {
 	}
 	_, err := Run("send-keys", "-t", ClaudePane(session), "Escape")
 	return err
-}
-
-// ResizeClaude sets the height of Claude's pane (lines or a percentage).
-func ResizeClaude(session, height string) {
-	if session == "" || height == "" {
-		return
-	}
-	_, _ = Run("resize-pane", "-t", ClaudePane(session), "-y", height)
 }

@@ -9,28 +9,48 @@ speech, whisper.cpp for listening, tmux for the layout, Claude Code hooks
 and MCP tools for the events. No cloud, no daemon, no fork of Claude Code.
 
 ```
-┌─ files: what Claude reads and changes ───────┬─ activity: what and why ────┐
-│  ▸ app/        │  9   def valid?             │ you  10:14                  │
-│  ▾ models/     │    -     !name.empty?       │   add email validation      │
-│     user.rb    │+ 10     return false if …   │                             │
-│  ▸ spec/       │+ 11                         │ claude  10:14               │
-│                │+ 12     email.include?("@") │   I'll add the validation   │
-│                │  13   end                   │   in the model, because the │
-│                ├─────────────────────────────│   controller accepts empty  │
-│                │ PAIRING.md                  │   emails.                   │
-│                │ ## Plan                     │   ✎ app/models/user.rb +3 −1│
-├─ claude: type here, or F5 to talk ───────────┤                             │
-│ ❯                                            │ claude asks  10:15          │
-└──────────────────────────────────────────────┴─────────────────────────────┘
- pair ● Claude is working: editing user.rb    🎙 talk F5  ✋ interrupt F6  claude F7
+┌─ files: what Claude reads and changes ───────┬─ claude ────────────────────┐
+│  ▸ app/        │  9   def valid?             │  ⠹ Claude is working  0:42  │
+│  ▾ models/     │    -     !name.empty?       │  ▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂ │
+│     user.rb    │+ 10     return false if …   │  editing app/models/user.rb │
+│  ▸ spec/       │+ 11                         ├─ activity: what and why ────┤
+│                │+ 12     email.include?("@") │ you  10:14                  │
+│                │  13   end                   │   add email validation      │
+│                ├─────────────────────────────│                             │
+│                │ PAIRING.md                  │ claude  10:14               │
+│                │ ## Plan                     │   I'll add the validation   │
+│                │ - validate email format     │   in the model, because …   │
+│                │                             │   ✎ app/models/user.rb +3 −1│
+└────────────────┴─────────────────────────────┴─────────────────────────────┘
+ pair ● Claude is working: editing user.rb   🎙 talk F5  ✋ interrupt F6  ⌨ claude F7
 ```
 
-The screen answers three questions: is Claude running (the status bar),
-which files is it changing (Neovim, the main area), and why (the activity
-log). Claude Code's own pane is a strip of a few lines under the editor:
-it is where you type, not what you watch. When Claude waits on a permission
-prompt the strip grows by itself so you can read and answer, and shrinks
-back when work resumes.
+The screen answers three questions: is Claude running, which files is it
+changing, and why.
+
+- **Is it running?** The panel at the top right is animated, with its own
+  motion and colour per state, and a timer. The borders of every pane take
+  the same colour, and the status bar says it in words.
+
+  | State | Motion | Colour |
+  | --- | --- | --- |
+  | Claude is working | a wave travelling to the right | yellow |
+  | Claude is speaking | bars jumping like a voice | cyan |
+  | Claude is asking you | all bars breathing together | magenta |
+  | listening | bars growing from the centre | red |
+  | Claude needs you | the whole row blinking | red |
+  | your turn | a calm line with one slow dot | green |
+
+- **Which files?** Neovim is the main area: project tree, the file Claude is
+  in with the change drawn in place, and `PAIRING.md` below.
+- **Why?** The activity column is the conversation: what you said, what
+  Claude said, and a card per edit.
+
+**Claude Code itself is hidden.** It runs in a background window. Press
+`F7` or click `⌨ claude` to bring its pane under the editor, and again to
+send it away. When Claude waits on a permission prompt the pane opens by
+itself and closes when work resumes; a pane you opened yourself stays until
+you close it.
 
 Status: v0, milestones 1 to 5 of the [PRD](PRD.md) implemented. Everything
 below was verified against Claude Code 2.1.282 on macOS 26 (see
@@ -83,7 +103,7 @@ first `pair` in a repository shows Claude Code's trust dialog; accept it
 In the session:
 
 1. Press `F5` (or click `🎙 talk` in the status bar) and say the task, or
-   type it in the Claude pane. Claude writes the plan and open questions to
+   press `F7` and type it in Claude's pane. Claude writes the plan and open questions to
    `PAIRING.md` before touching code.
 2. Before each change Claude calls `narrate`. An attention sound plays
    first when it has been quiet for a while, then one or two sentences are
@@ -119,7 +139,7 @@ speaking`, `❓ Claude is asking you`, `🎙 listening`, `○ your turn`, or
 | --- | --- | --- |
 | Anywhere in the session | `F5`, `C-b t`, or click `🎙 talk` | open the mic: record, transcribe, send to Claude (or answer its question) |
 | Anywhere in the session | `F6`, `C-b i`, or click `✋ interrupt` | interrupt Claude, then open the mic |
-| Anywhere in the session | `F7` or click `claude` | Claude's pane full screen, and back |
+| Anywhere in the session | `F7`, `C-b c`, or click `⌨ claude` | show Claude Code's pane under the editor, or hide it |
 | Anywhere in the session | mouse click, `C-b` + arrows | switch pane |
 | Neovim | `<leader>pt` / `<leader>pi` | same as `F5` / `F6` |
 | Neovim (visual) | `<leader>pp` | point Claude at the selected lines, with an optional note |
@@ -142,15 +162,17 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair` / `pair start` | create the session (editor, activity log, Claude strip) or attach |
 | `pair init [--lang en] [--voice Samantha] [--rate 190]` | prepare the repository (see above) and save your voice settings |
 | `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
+| `pair claude` | show or hide Claude Code's pane (what `F7` runs) |
 | `pair stop` | kill the session and any running `say`/`rec` |
 | `pair replay [file] [--speed N] [--mute] [--no-nvim]` | play `.pair/events.jsonl` back: narrations spoken, jumps replayed |
 | `pair log [--follow] [file]` | the session as a conversation; this is what the activity column runs |
+| `pair presence` | the animated state indicator; this is what the top right panel runs |
 | `pair mcp` | the MCP server (run by Claude Code) |
 | `pair hook <name>` | hook handlers (run by Claude Code, keymaps and hotkeys) |
 
 ## How it works
 
-- **tmux** holds three panes on pair's own server (`tmux -L pair`), so its
+- **tmux** holds the panes on pair's own server (`tmux -L pair`), so its
   key bindings, mouse mode and status line never touch your other tmux
   sessions. Claude Code runs with `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`, so
   `narrate` and `ask` stay blocking instead of being moved to a background
@@ -212,8 +234,9 @@ for you and updates the language line in `CLAUDE.md`.
 | `PAIR_SESSION` | `pair` | tmux session name |
 | `PAIR_TMUX_SOCKET` | `pair` | name of pair's tmux server |
 | `PAIR_LOG_WIDTH` | `36%` | width of the activity log |
-| `PAIR_CLAUDE_HEIGHT` | `8` | height of Claude's strip, in lines or as a percentage |
-| `PAIR_CLAUDE_GROWN` | `50%` | its height while Claude waits on a permission prompt |
+| `PAIR_CLAUDE` | `hidden` | `shown` starts the session with Claude Code's pane open |
+| `PAIR_CLAUDE_HEIGHT` | `45%` | height of Claude Code's pane when it is shown |
+| `PAIR_PRESENCE_HEIGHT` | `5` | lines of the animated panel |
 | `PAIR_COLORSCHEME` | `retrobox` | Neovim colour scheme, applied only when you have no Neovim config |
 | `PAIR_SOCK` | `$TMPDIR/pair-<repo hash>.sock` | Neovim listen address (≤ 104 bytes, or `127.0.0.1:<port>`) |
 | `PAIR_HIGHLIGHT_TTL` | `20` | seconds before the "about to change" highlight clears |
@@ -258,6 +281,9 @@ guessing.
   hello` in the same terminal; if the voice is missing, pick another with
   `pair init --voice <name>`.
 - **`F5` does nothing**: on a Mac laptop press `fn`+`F5`, or use `C-b t`.
+- **I need to see what Claude Code itself shows**: press `F7`. Its pane is
+  hidden by default and the session works without it, but it is where
+  permission prompts and Claude's typed answers appear.
 - **I attached with plain `tmux attach` and see nothing**: pair runs on its
   own server; use `pair` or `tmux -L pair attach -t pair`.
 - **Claude asked something and nothing happens**: the microphone is closed

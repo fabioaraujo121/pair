@@ -106,7 +106,7 @@ type Change struct {
 func (h *Handler) Prompt(in *Input) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	h.state(tmux.StateWorking, "")
+	h.startTurn()
 	_ = h.Log.Session("› " + oneLine(in.Prompt, 120))
 	st := loadState(h.Cfg.StateDir)
 	candidates := h.candidates(ctx, st)

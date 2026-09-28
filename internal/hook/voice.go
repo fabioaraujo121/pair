@@ -12,6 +12,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/speech"
+	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
@@ -42,11 +43,32 @@ func Click(args []string, out io.Writer) error {
 	case "stop":
 		return Interrupt(args[1:], out)
 	case "claude":
-		cfg := voiceConfig(args[1:])
-		_, err := tmux.Run("resize-pane", "-Z", "-t", tmux.ClaudePane(cfg.Session))
-		return err
+		return ToggleClaude(args[1:], out)
 	}
 	return nil // a click anywhere else on the status bar
+}
+
+// ToggleClaude shows Claude Code's pane under the editor, or hides it
+// again. From then on the pane is the engineer's: pair no longer hides it
+// by itself.
+func ToggleClaude(args []string, out io.Writer) error {
+	for _, a := range args {
+		if a == "--if-waiting" {
+			return showClaudeIfWaiting(voiceConfig(args), out)
+		}
+	}
+	cfg := voiceConfig(args)
+	_ = os.Remove(filepath.Join(cfg.StateDir, "claude_autoshown"))
+	visible, err := tmux.ToggleClaude(cfg.Session, cfg.ClaudeHeight)
+	if err != nil {
+		return err
+	}
+	if visible {
+		fmt.Fprintln(out, "claude shown")
+	} else {
+		fmt.Fprintln(out, "claude hidden")
+	}
+	return nil
 }
 
 // Interrupt stops Claude mid-turn and hands the microphone to the engineer:
@@ -102,8 +124,9 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.AskMax+30)*time.Second)
 	defer cancel()
 	inSession := tmux.HasSession(cfg.Session)
+	before := status.Read(cfg.StateDir)
 	if inSession {
-		tmux.SetState(cfg.Session, tmux.StateListening, "")
+		status.Set(cfg, tmux.StateListening, "")
 	}
 	heard, err := listener.Listen(ctx)
 	_, asked := speech.PendingAskFor(cfg.StateDir, time.Duration(cfg.AskWait+60)*time.Second)
@@ -111,11 +134,13 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	if inSession {
 		switch {
 		case asked && heard.Text == "":
-			tmux.SetState(cfg.Session, tmux.StateAsking, "press F5 or click talk to answer")
+			status.Set(cfg, tmux.StateAsking, "press F5 or click talk to answer")
 		case asked:
-			tmux.SetState(cfg.Session, tmux.StateWorking, "")
+			status.Set(cfg, tmux.StateWorking, "")
+		case heard.Text == "" && before.State == tmux.StateWorking:
+			status.Set(cfg, tmux.StateWorking, before.Detail) // nothing was said: Claude is still at it
 		default:
-			tmux.SetState(cfg.Session, tmux.StateIdle, "")
+			status.Set(cfg, tmux.StateIdle, "")
 		}
 	}
 	payload := map[string]any{"heard": heard}
@@ -208,4 +233,36 @@ func voiceConfig(args []string) config.Config {
 	}
 	root = filepath.Clean(strings.TrimSpace(root))
 	return config.Load(root)
+}
+
+// showClaudeIfWaiting opens Claude Code's pane when it sits on a dialog
+// that no hook announces: the workspace trust question of a repository
+// opened for the first time. Without this the session would look idle
+// for ever, with the question out of sight.
+func showClaudeIfWaiting(cfg config.Config, out io.Writer) error {
+	if cfg.Session == "" || tmux.ClaudeVisible(cfg.Session) {
+		return nil
+	}
+	screen, err := tmux.Run("capture-pane", "-p", "-t", tmux.ClaudePane(cfg.Session))
+	if err != nil {
+		return err
+	}
+	if !WaitingOnDialog(screen) {
+		return nil
+	}
+	if err := tmux.ShowClaude(cfg.Session, cfg.ClaudeHeight); err != nil {
+		return err
+	}
+	status.Set(cfg, tmux.StateAttention, "answer Claude Code's question below")
+	_ = events.Open(cfg.StateDir).Session("⚠ Claude Code is asking something before it can start: see its pane below")
+	fmt.Fprintln(out, "claude shown: it is waiting on a dialog")
+	return nil
+}
+
+// WaitingOnDialog reports whether Claude Code's screen shows a question
+// that blocks it before any hook can run.
+func WaitingOnDialog(screen string) bool {
+	s := strings.ToLower(screen)
+	return strings.Contains(s, "trust this folder") || strings.Contains(s, "do you trust") ||
+		(strings.Contains(s, "enter to confirm") && strings.Contains(s, "esc to cancel"))
 }

@@ -207,3 +207,17 @@ func TestRepeatedTranscriptIsNotSentTwice(t *testing.T) {
 		t.Fatal("a different sentence is not a repeat")
 	}
 }
+
+func TestWaitingOnDialog(t *testing.T) {
+	trust := " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n Enter to confirm · Esc to cancel\n"
+	if !WaitingOnDialog(trust) {
+		t.Fatal("the trust dialog must be recognized")
+	}
+	working := "❯ Add email validation\n✻ Thinking… (12s)\n  ⏵⏵ accept edits on · esc to interrupt\n"
+	if WaitingOnDialog(working) {
+		t.Fatal("a working session is not a dialog")
+	}
+	if WaitingOnDialog("") {
+		t.Fatal("an empty screen is not a dialog")
+	}
+}

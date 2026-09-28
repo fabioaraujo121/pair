@@ -24,6 +24,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
 	"github.com/fabioaraujo121/pair/internal/speech"
+	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
@@ -89,7 +90,7 @@ func New(cfg config.Config, version string) (*Server, error) {
 
 		AskManual: cfg.AskMic != "auto" && !cfg.Mute,
 		AskWait:   time.Duration(cfg.AskWait) * time.Second,
-		State:     func(state, detail string) { tmux.SetState(cfg.Session, state, detail) },
+		State:     func(state, detail string) { status.Set(cfg, state, detail) },
 	}
 	if cfg.Cue && !cfg.Mute {
 		srv.Cue = AttentionSound

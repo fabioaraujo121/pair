@@ -10,21 +10,23 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/hook"
+	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
 // Start creates the tmux session or attaches to it when it already exists.
 //
-// The screen answers three questions: is Claude running (status bar), which
-// files is it changing (Neovim, the main area) and why (the activity log).
-// Claude Code's own pane is a strip under the editor: it is where prompts
-// are typed and permissions answered, not what one watches.
+// The screen answers three questions: is Claude running (the presence
+// animation, the status bar and the colour of the borders), which files is
+// it changing (Neovim, the main area) and why (the activity column).
+// Claude Code itself runs in a background window: F7 or the `claude`
+// button brings its pane under the editor and sends it away again.
 //
 //	┌──────────────────────────────┬──────────────────┐
-//	│ neovim: tree | editor        │ activity log     │
-//	│              | PAIRING.md    │ narrations, files│
-//	├──────────────────────────────┤ changed, diffs   │
-//	│ claude                       │                  │
+//	│ neovim: tree | editor        │ presence         │
+//	│              | PAIRING.md    ├──────────────────┤
+//	│                              │ activity         │
+//	│ (claude, when shown)         │                  │
 //	└──────────────────────────────┴──────────────────┘
 func Start() error {
 	cfg := config.Load("")
@@ -54,7 +56,7 @@ func Start() error {
 	}
 	_ = log.Append("session_start", map[string]any{"root": cfg.Root, "sock": cfg.Sock, "lang": cfg.Lang, "voice": cfg.Voice})
 	_ = log.Session("● pair session started in " + tildePath(cfg.Root))
-	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. The microphone is closed until you press F5 or click 🎙 talk.", cfg.Lang, cfg.Voice))
+	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. The microphone is closed until you press F5 or click 🎙 talk. F7 shows Claude Code.", cfg.Lang, cfg.Voice))
 	return attach(cfg.Session)
 }
 
@@ -83,7 +85,13 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 	if err != nil {
 		return fail(err)
 	}
-	claude, err := tmuxRun("split-window", "-v", "-P", "-F", "#{pane_id}", "-l", cfg.ClaudeHeight, "-t", editor, "-c", cfg.Root)
+	// -b: the new pane goes above the activity column.
+	presencePane, err := tmuxRun("split-window", "-v", "-b", "-P", "-F", "#{pane_id}", "-l", cfg.Presence, "-t", logPane, "-c", cfg.Root)
+	if err != nil {
+		return fail(err)
+	}
+	// Claude Code lives in a window of its own, in the background.
+	claude, err := tmuxRun("new-window", "-d", "-P", "-F", "#{pane_id}", "-n", "claude", "-t", "="+s+":", "-c", cfg.Root)
 	if err != nil {
 		return fail(err)
 	}
@@ -91,46 +99,58 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 	steps := [][]string{
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_NVIM", editor},
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_LOG", logPane},
+		{"set-environment", "-t", "=" + s, "PAIR_PANE_PRESENCE", presencePane},
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_CLAUDE", claude},
 		{"set-option", "-p", "-t", editor, "@pair_name", "files: what Claude reads and changes"},
+		{"set-option", "-p", "-t", presencePane, "@pair_name", "claude"},
 		{"set-option", "-p", "-t", logPane, "@pair_name", "activity: what Claude does and why"},
-		{"set-option", "-p", "-t", claude, "@pair_name", "claude: type here, or F5 to talk · F7 full screen"},
+		{"set-option", "-p", "-t", claude, "@pair_name", "claude code: type here · F7 hides this pane"},
 	}
-	steps = append(steps, sessionChrome(exe, claude)...)
+	steps = append(steps, sessionChrome(exe)...)
 	for _, args := range steps {
 		if _, err := tmuxRun(args...); err != nil {
 			return fail(err)
 		}
 	}
-	tmux.SetState(s, tmux.StateIdle, "")
+	status.Set(cfg, tmux.StateIdle, "")
 
 	nvimCmd := "clear; nvim --cmd " + shellQuote("set rtp^="+pluginDir) +
 		" --cmd " + shellQuote("let g:pair_bin='"+exe+"' | let g:pair_root='"+cfg.Root+"'") +
 		" --listen " + shellQuote(cfg.Sock) +
 		" -c " + shellQuote("lua require('pair').layout()")
 	tailCmd := "clear; " + shellQuote(exe) + " log --follow"
+	presenceCmd := "clear; " + shellQuote(exe) + " presence"
 	claudeCmd := "clear; claude" + os.Getenv("PAIR_CLAUDE_ARGS")
 
 	keys := [][]string{
 		{"send-keys", "-t", editor, nvimCmd, "Enter"},
 		{"send-keys", "-t", logPane, tailCmd, "Enter"},
+		{"send-keys", "-t", presencePane, presenceCmd, "Enter"},
 		{"send-keys", "-t", claude, claudeCmd, "Enter"},
-		{"select-pane", "-t", claude},
+		{"select-pane", "-t", editor},
 	}
 	for _, args := range keys {
 		if _, err := tmuxRun(args...); err != nil {
 			return err
 		}
 	}
+	if cfg.ClaudeShown {
+		return tmux.ShowClaude(s, cfg.ClaudeHeight)
+	}
+	// A repository opened for the first time makes Claude Code ask whether
+	// the folder is trusted, before any hook runs. Look once it has had
+	// time to start, and open its pane if it is waiting.
+	_, _ = tmuxRun("run-shell", "-b", "-d", "5", shellQuote(exe)+" claude --if-waiting >/dev/null 2>&1")
 	return nil
 }
 
 // sessionChrome returns the options and key bindings of pair's tmux server:
 // mouse, labelled panes, a status line with the current state and the keys.
 // They are global to the server, which is pair's own.
-func sessionChrome(exe, claudePane string) [][]string {
+func sessionChrome(exe string) [][]string {
 	listen := shellQuote(exe) + " hook listen >/dev/null 2>&1"
 	interrupt := shellQuote(exe) + " hook interrupt >/dev/null 2>&1"
+	toggle := shellQuote(exe) + " claude >/dev/null 2>&1"
 	return [][]string{
 		{"set-option", "-g", "mouse", "on"},
 		// Full colour for Neovim's syntax highlighting.
@@ -147,7 +167,7 @@ func sessionChrome(exe, claudePane string) [][]string {
 		// Buttons: clicking one runs `pair hook click <name>`.
 		{"set-option", "-g", "status-right", "#[range=user|talk]#[fg=black,bg=white] 🎙 talk F5 #[default]#[norange] " +
 			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
-			"#[range=user|claude]#[fg=black,bg=white] claude F7 #[default]#[norange] "},
+			"#[range=user|claude]#[fg=black,bg=white] ⌨ claude F7 #[default]#[norange] "},
 		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", shellQuote(exe) + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
@@ -156,9 +176,9 @@ func sessionChrome(exe, claudePane string) [][]string {
 		{"bind-key", "-n", "F6", "run-shell", "-b", interrupt},
 		{"bind-key", "t", "run-shell", "-b", listen},
 		{"bind-key", "i", "run-shell", "-b", interrupt},
-		// F7 brings Claude's pane to full screen and back, for permission
-		// prompts and long answers.
-		{"bind-key", "-n", "F7", "resize-pane", "-Z", "-t", claudePane},
+		// F7 shows Claude Code's pane under the editor and hides it again.
+		{"bind-key", "-n", "F7", "run-shell", "-b", toggle},
+		{"bind-key", "c", "run-shell", "-b", toggle},
 	}
 }
 

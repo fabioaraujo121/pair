@@ -18,9 +18,9 @@ const (
 	DefaultVoice        = "Samantha"
 	DefaultRate         = 190
 	DefaultLang         = "en"
-	DefaultLogWidth     = "36%" // activity log, right column
-	DefaultClaudeHeight = "8"   // lines of the Claude Code strip under the editor
-	DefaultClaudeGrown  = "50%" // its height while Claude waits on a permission prompt
+	DefaultLogWidth     = "36%" // presence and activity, right column
+	DefaultClaudeHeight = "45%" // Claude Code's pane when it is shown; it is hidden by default
+	DefaultPresence     = "5"   // lines of the presence animation
 	DefaultCueIdle      = 6     // seconds of quiet after which speech is announced
 	DefaultAskWait      = 180   // seconds a question waits for the engineer to open the mic
 	DefaultHighlightTTL = 20
@@ -53,7 +53,8 @@ type Config struct {
 	SilenceLevel string
 	LogWidth     string // PAIR_LOG_WIDTH
 	ClaudeHeight string // PAIR_CLAUDE_HEIGHT
-	ClaudeGrown  string // PAIR_CLAUDE_GROWN
+	ClaudeShown  bool   // PAIR_CLAUDE=shown starts with Claude's pane open
+	Presence     string // PAIR_PRESENCE_HEIGHT
 	AskMic       string // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
 	AskWait      int    // PAIR_ASK_WAIT seconds
 	Cue          bool   // PAIR_CUE=off disables the attention sound before speech
@@ -115,7 +116,8 @@ func Load(cwd string) Config {
 		SilenceLevel: str("PAIR_SILENCE_LEVEL", DefaultSilenceLevel),
 		LogWidth:     str("PAIR_LOG_WIDTH", DefaultLogWidth),
 		ClaudeHeight: str("PAIR_CLAUDE_HEIGHT", DefaultClaudeHeight),
-		ClaudeGrown:  str("PAIR_CLAUDE_GROWN", DefaultClaudeGrown),
+		ClaudeShown:  str("PAIR_CLAUDE", "hidden") == "shown",
+		Presence:     str("PAIR_PRESENCE_HEIGHT", DefaultPresence),
 		AskMic:       str("PAIR_ASK_MIC", "manual"),
 		AskWait:      num("PAIR_ASK_WAIT", DefaultAskWait),
 		Cue:          str("PAIR_CUE", "on") != "off",

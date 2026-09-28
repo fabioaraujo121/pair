@@ -20,6 +20,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/logview"
 	"github.com/fabioaraujo121/pair/internal/mcpserver"
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/presence"
 	"github.com/fabioaraujo121/pair/internal/replay"
 	"github.com/fabioaraujo121/pair/internal/speech"
 )
@@ -30,7 +31,8 @@ var version = "dev"
 const usage = `pair — voice-driven pairing for Claude Code in the terminal
 
 Usage:
-  pair [start]       create the tmux session (Claude Code | Neovim / log) or attach to it
+  pair [start]       create the session (editor | presence and activity) or attach to it
+  pair claude        show or hide Claude Code's pane (hidden by default; F7 in the session)
   pair init [--lang en] [--voice Samantha] [--rate 190]
                      prepare this repository: hooks, CLAUDE.md block, MCP server, PAIRING.md
   pair doctor        check dependencies and configuration
@@ -43,6 +45,7 @@ Usage:
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
   pair replay [events.jsonl] [--speed N] [--mute] [--no-nvim]   play a session back
   pair log [--follow] [events.jsonl]   the session as a conversation (the activity column)
+  pair presence      the animated state indicator (the panel above the activity column)
   pair version
 
 Environment: PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
@@ -104,6 +107,10 @@ func main() {
 		err = runReplay(args)
 	case "log":
 		err = runLog(args)
+	case "presence":
+		err = runPresence()
+	case "claude": // show or hide Claude Code's pane
+		err = hook.ToggleClaude(args, os.Stdout)
 	case "version", "-v", "--version":
 		fmt.Println("pair", version)
 	case "help", "-h", "--help":
@@ -209,4 +216,12 @@ func runLog(args []string) error {
 		width = w
 	}
 	return logview.Render(path, cfg.Root, os.Stdout, width, term.IsTerminal(int(os.Stdout.Fd())))
+}
+
+// runPresence animates the state of the session until interrupted.
+func runPresence() error {
+	cfg := config.Load(os.Getenv("PAIR_ROOT"))
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return presence.Run(ctx, cfg.StateDir, os.Stdout)
 }

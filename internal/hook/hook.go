@@ -19,6 +19,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
@@ -215,11 +216,15 @@ func (h *Handler) Notify(in *Input) error {
 		return nil
 	}
 	_ = h.Log.Session("⚠ Claude needs you: " + msg)
-	tmux.SetState(h.Cfg.Session, tmux.StateAttention, msg)
-	// Make room to read and answer the prompt; the strip shrinks back on
-	// the next sign of activity.
-	tmux.ResizeClaude(h.Cfg.Session, h.Cfg.ClaudeGrown)
-	_ = os.WriteFile(h.grownMarker(), nil, 0o644)
+	status.Set(h.Cfg, tmux.StateAttention, msg)
+	// Claude's pane is hidden: bring it in so the prompt can be read and
+	// answered. It goes away again on the next sign of activity, unless the
+	// engineer had opened it themselves.
+	if h.Cfg.Session != "" && !tmux.ClaudeVisible(h.Cfg.Session) {
+		if err := tmux.ShowClaude(h.Cfg.Session, h.Cfg.ClaudeHeight); err == nil {
+			_ = os.WriteFile(h.autoShown(), nil, 0o644)
+		}
+	}
 	chime("Funk")
 	return nil
 }
@@ -260,18 +265,31 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// state updates the status bar indicator of the running session and gives
-// the screen back to the editor once Claude no longer waits on the
-// engineer.
+// state records what is happening and gives the screen back to the editor
+// once Claude no longer waits on the engineer.
 func (h *Handler) state(kind, detail string) {
-	tmux.SetState(h.Cfg.Session, kind, detail)
-	if _, err := os.Stat(h.grownMarker()); err == nil {
-		_ = os.Remove(h.grownMarker())
-		tmux.ResizeClaude(h.Cfg.Session, h.Cfg.ClaudeHeight)
+	status.Set(h.Cfg, kind, detail)
+	h.hideIfAutoShown()
+}
+
+// startTurn is state(working) at the beginning of a turn of Claude's.
+func (h *Handler) startTurn() {
+	status.StartTurn(h.Cfg)
+	h.hideIfAutoShown()
+}
+
+// hideIfAutoShown hides Claude's pane when pair itself had opened it for a
+// permission prompt.
+func (h *Handler) hideIfAutoShown() {
+	if _, err := os.Stat(h.autoShown()); err == nil {
+		_ = os.Remove(h.autoShown())
+		_ = tmux.HideClaude(h.Cfg.Session)
 	}
 }
 
-func (h *Handler) grownMarker() string { return filepath.Join(h.Cfg.StateDir, "claude_grown") }
+// autoShown marks that Claude's pane was opened by pair, not by the
+// engineer.
+func (h *Handler) autoShown() string { return filepath.Join(h.Cfg.StateDir, "claude_autoshown") }
 
 // LocateRange returns the 1-based first and last line of the first
 // occurrence of old in content. found is false when old is empty or absent,
