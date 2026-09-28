@@ -275,3 +275,27 @@ func TestPostEditDrawsTheChangeInTheEditor(t *testing.T) {
 		t.Fatalf("new file: %v", fn.diffs)
 	}
 }
+
+func TestHooksDoNothingOutsideAPairSession(t *testing.T) {
+	root := t.TempDir()
+	_ = os.Mkdir(filepath.Join(root, ".git"), 0o755)
+	input := `{"session_id":"other-conversation","cwd":"` + root + `","hook_event_name":"UserPromptSubmit","prompt":"hello"}`
+
+	t.Setenv("PAIR_ACTIVE", "")
+	var out strings.Builder
+	if err := Run("prompt", strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".pair")); err == nil {
+		t.Fatal("a Claude Code started outside pair must leave no trace")
+	}
+
+	t.Setenv("PAIR_ACTIVE", "1")
+	t.Setenv("PAIR_SESSION", "no-such-session")
+	if err := Run("prompt", strings.NewReader(input), &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".pair", "events.jsonl")); err != nil {
+		t.Fatal("inside a session the prompt is logged")
+	}
+}

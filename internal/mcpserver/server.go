@@ -56,6 +56,10 @@ type Server struct {
 	// State reports what is happening to the status bar. nil disables it.
 	State func(state, detail string)
 
+	// Inactive is set when Claude Code runs outside a pair session: the
+	// tools answer at once, without speaking, listening or logging.
+	Inactive bool
+
 	// AskManual keeps the microphone closed after a question: the engineer
 	// opens it (key or click) and the answer is delivered by that
 	// push-to-talk. AskWait is how long the question waits.
@@ -95,8 +99,12 @@ func New(cfg config.Config, version string) (*Server, error) {
 	if cfg.Cue && !cfg.Mute {
 		srv.Cue = AttentionSound
 	}
+	srv.Inactive = !config.Active()
 	return srv, nil
 }
+
+// outside is the result of a tool called when no pair session is running.
+const outside = "not spoken: no pair session is running (start one with `pair`). Carry on without narrating or asking aloud."
 
 // Kinds of speech, for the cue and the status bar.
 const (
@@ -166,6 +174,9 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
 }
 
 func (s *Server) narrate(ctx context.Context, _ *mcp.CallToolRequest, in NarrateInput) (*mcp.CallToolResult, any, error) {
+	if s.Inactive {
+		return text(outside), nil, nil
+	}
 	if err := checkLength("narrate", in.Text); err != nil {
 		return nil, nil, err
 	}
@@ -179,6 +190,9 @@ func (s *Server) narrate(ctx context.Context, _ *mcp.CallToolRequest, in Narrate
 }
 
 func (s *Server) show(ctx context.Context, _ *mcp.CallToolRequest, in ShowInput) (*mcp.CallToolResult, any, error) {
+	if s.Inactive {
+		return text(outside), nil, nil
+	}
 	if in.File == "" {
 		return nil, nil, fmt.Errorf("show: file is required")
 	}
@@ -232,6 +246,9 @@ func (s *Server) show(ctx context.Context, _ *mcp.CallToolRequest, in ShowInput)
 // ask speaks the question, then listens. Speaking and listening happen
 // under the same lock so the microphone never records the speaker.
 func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (*mcp.CallToolResult, any, error) {
+	if s.Inactive {
+		return text("(no answer) " + outside + " Decide yourself and say which option you took."), nil, nil
+	}
 	if err := checkLength("ask", in.Question); err != nil {
 		return nil, nil, err
 	}

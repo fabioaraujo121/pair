@@ -31,7 +31,13 @@ var version = "dev"
 const usage = `pair — voice-driven pairing for Claude Code in the terminal
 
 Usage:
-  pair [start]       create the session (editor | presence and activity) or attach to it
+  pair [start]       start a new session (editor | presence and activity), or go back
+                     to the one that is running
+       --continue    continue the last session: its log, and Claude's conversation
+       --name <name> name the session
+  pair sessions      list the sessions of this repository
+  pair resume <id or name>   open a past session again, with Claude's conversation
+  pair rename [<id or name>] <new name>
   pair claude        show or hide Claude Code's pane (hidden by default; F7 in the session)
   pair init [--lang en] [--voice Samantha] [--rate 190]
                      prepare this repository: hooks, CLAUDE.md block, MCP server, PAIRING.md
@@ -43,8 +49,8 @@ Usage:
   pair hook interrupt  stop Claude (Escape), then listen
   pair hook point --file f --start n [--end m] [--note t]   point Claude at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
-  pair replay [events.jsonl] [--speed N] [--mute] [--no-nvim]   play a session back
-  pair log [--follow] [events.jsonl]   the session as a conversation (the activity column)
+  pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]   play a session back
+  pair log [--follow] [<id or name>]   a session as a conversation (the activity column)
   pair presence      the animated state indicator (the panel above the activity column)
   pair version
 
@@ -59,11 +65,28 @@ func main() {
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
 	}
+	switch cmd {
+	case "-h", "--help", "-v", "--version":
+	default:
+		if len(cmd) > 1 && cmd[0] == '-' { // `pair --continue`, `pair --name x`
+			cmd, args = "start", os.Args[1:]
+		}
+	}
 
 	var err error
 	switch cmd {
 	case "start":
-		err = cli.Start()
+		err = cli.Start(args)
+	case "resume": // open a past session again: pair resume <id or name>
+		key := "last"
+		if len(args) > 0 {
+			key = args[0]
+		}
+		err = cli.Start([]string{"--resume", key})
+	case "sessions", "list", "ls":
+		err = cli.Sessions(os.Stdout)
+	case "rename":
+		err = cli.Rename(args, os.Stdout)
 	case "init":
 		err = cli.Init(args)
 	case "doctor":
@@ -152,6 +175,7 @@ func runReplay(args []string) error {
 	path := filepath.Join(cfg.StateDir, "events.jsonl")
 	opts := replay.Options{Speed: 1, Out: os.Stdout}
 	mute, noNvim := cfg.Mute, false
+	var err error
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--speed":
@@ -164,7 +188,9 @@ func runReplay(args []string) error {
 		case "--no-nvim":
 			noNvim = true
 		default:
-			path = args[i]
+			if path, err = sessionFile(args[i]); err != nil {
+				return err
+			}
 		}
 	}
 	events, err := replay.Load(path)
@@ -203,7 +229,11 @@ func runLog(args []string) error {
 		case "--follow", "-f":
 			follow = true
 		default:
-			path = a
+			p, err := sessionFile(a)
+			if err != nil {
+				return err
+			}
+			path = p
 		}
 	}
 	if follow {
@@ -224,4 +254,13 @@ func runPresence() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return presence.Run(ctx, cfg.StateDir, os.Stdout)
+}
+
+// sessionFile resolves an argument of `pair log` or `pair replay`: a file
+// that exists, or the id or name of a session.
+func sessionFile(arg string) (string, error) {
+	if _, err := os.Stat(arg); err == nil {
+		return arg, nil
+	}
+	return cli.SessionEvents(arg)
 }

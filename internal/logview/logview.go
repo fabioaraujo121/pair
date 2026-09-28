@@ -50,8 +50,15 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 	one := func(en Entry) ([]Entry, bool) { en.Time = at; return []Entry{en}, true }
 
 	switch e.Type {
-	case "session_start":
-		return one(Entry{Dim: true, Text: fmt.Sprintf("session started · speaking %s, voice %s · the microphone is closed until you press F5 or click talk", str(p, "lang"), str(p, "voice"))})
+	case "session_start", "session_continue":
+		what := "session started"
+		if e.Type == "session_continue" {
+			what = "session continued, Claude remembers the conversation above"
+		}
+		if name := str(p, "name"); name != "" && name != str(p, "id") {
+			what = "“" + name + "” · " + what
+		}
+		return one(Entry{Dim: true, Text: fmt.Sprintf("%s · speaking %s, voice %s · the microphone is closed until you press F5 or click talk", what, str(p, "lang"), str(p, "voice"))})
 
 	case "listen":
 		h, _ := p["heard"].(map[string]any)

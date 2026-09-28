@@ -19,6 +19,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/session"
 	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
@@ -83,13 +84,20 @@ type Handler struct {
 	Stdout io.Writer // hook JSON output (UserPromptSubmit)
 }
 
-// Run dispatches a hook by name.
+// Run dispatches a hook by name. The hooks are registered for the whole
+// repository, so they also fire for a Claude Code started outside pair:
+// then they do nothing, and that conversation leaves the session alone.
 func Run(name string, stdin io.Reader, stdout io.Writer) error {
+	if !config.Active() {
+		_, _ = io.Copy(io.Discard, stdin)
+		return nil
+	}
 	in, err := Parse(stdin)
 	if err != nil {
 		return fmt.Errorf("parse hook input: %w", err)
 	}
 	cfg := config.Load(in.CWD)
+	session.NoteClaude(cfg.StateDir, in.SessionID)
 	h := &Handler{Cfg: cfg, Log: events.Open(cfg.StateDir), Nvim: nvim.New(cfg.Sock), Stdout: stdout}
 	switch name {
 	case "pre_edit":

@@ -1,15 +1,18 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/hook"
+	"github.com/fabioaraujo121/pair/internal/session"
 	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
@@ -28,7 +31,11 @@ import (
 //	│                              │ activity         │
 //	│ (claude, when shown)         │                  │
 //	└──────────────────────────────┴──────────────────┘
-func Start() error {
+func Start(args []string) error {
+	opts, err := parseStart(args)
+	if err != nil {
+		return err
+	}
 	cfg := config.Load("")
 	for _, bin := range []string{"tmux", "nvim", "claude"} {
 		if _, err := exec.LookPath(bin); err != nil {
@@ -38,29 +45,128 @@ func Start() error {
 	if config.SockTooLong(cfg.Sock) {
 		return fmt.Errorf("PAIR_SOCK is %d bytes; macOS allows %d. Use a shorter path or 127.0.0.1:<port>", len(cfg.Sock), config.MaxSockPath)
 	}
-	log := events.Open(cfg.StateDir)
-	if f, err := os.OpenFile(log.SessionLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
-		_ = f.Close()
-	}
 	pluginDir, err := InstallPlugin(cfg.UserDir)
 	if err != nil {
 		return err
 	}
 
 	if hasSession(cfg.Session) {
+		if opts.resume != "" || opts.name != "" {
+			return fmt.Errorf("a session is already running here; `pair stop` it first, or run `pair` to go back to it")
+		}
 		return attach(cfg.Session)
 	}
-	hook.ResetState(cfg.StateDir) // fresh baseline for hand-edit detection
-	if err := createSession(cfg, pluginDir, log); err != nil {
+
+	meta, continued, err := openSession(cfg, opts)
+	if err != nil {
 		return err
 	}
-	_ = log.Append("session_start", map[string]any{"root": cfg.Root, "sock": cfg.Sock, "lang": cfg.Lang, "voice": cfg.Voice})
-	_ = log.Session("● pair session started in " + tildePath(cfg.Root))
+	log := events.Open(cfg.StateDir)
+	if f, err := os.OpenFile(log.SessionLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+		_ = f.Close()
+	}
+	if !continued {
+		hook.ResetState(cfg.StateDir) // fresh baseline for hand-edit detection
+	}
+	if err := createSession(cfg, pluginDir, log, claudeArgs(cfg, meta, continued)); err != nil {
+		return err
+	}
+	kind, word := "session_start", "started"
+	if continued {
+		kind, word = "session_continue", "continued"
+	}
+	_ = log.Append(kind, map[string]any{"root": cfg.Root, "sock": cfg.Sock, "lang": cfg.Lang, "voice": cfg.Voice, "id": meta.ID, "name": meta.Label()})
+	_ = log.Session(fmt.Sprintf("● pair session %s %s in %s", meta.Label(), word, tildePath(cfg.Root)))
 	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. The microphone is closed until you press F5 or click 🎙 talk. F7 shows Claude Code.", cfg.Lang, cfg.Voice))
 	return attach(cfg.Session)
 }
 
-func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
+// startOptions are the flags of `pair start`.
+type startOptions struct {
+	name      string // --name: the name of the new session
+	resume    string // --resume <id or name>, or "last" for --continue
+	continue_ bool
+}
+
+func parseStart(args []string) (startOptions, error) {
+	var o startOptions
+	for i := 0; i < len(args); i++ {
+		value := func(flag string) (string, error) {
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return "", fmt.Errorf("%s needs a value", flag)
+			}
+			i++
+			return args[i], nil
+		}
+		var err error
+		switch a := args[i]; a {
+		case "-c", "--continue":
+			o.continue_, o.resume = true, "last"
+		case "-n", "--name":
+			o.name, err = value(a)
+		case "-r", "--resume":
+			o.resume, err = value(a)
+		default:
+			err = fmt.Errorf("unknown option %q (usage: pair [--continue] [--name <name>] [--resume <id or name>])", a)
+		}
+		if err != nil {
+			return o, err
+		}
+	}
+	return o, nil
+}
+
+// openSession decides which session the screen is about to show: a new
+// one, the last one continued, or a past one opened again.
+func openSession(cfg config.Config, o startOptions) (session.Meta, bool, error) {
+	if o.resume == "" {
+		m, err := session.New(cfg.StateDir, o.name, time.Now())
+		return m, false, err
+	}
+	if len(session.List(cfg.StateDir)) == 0 {
+		if err := session.Archive(cfg.StateDir); err != nil { // a log from before sessions were kept apart
+			return session.Meta{}, false, err
+		}
+	}
+	m, err := session.Restore(cfg.StateDir, o.resume)
+	if errors.Is(err, session.ErrNone) {
+		return m, false, fmt.Errorf("there is no earlier session in this repository to continue; start one with `pair`")
+	}
+	if err != nil {
+		return m, false, err
+	}
+	if o.name != "" {
+		m.Name = o.name
+		_ = session.Save(cfg.StateDir, m)
+	}
+	return m, true, nil
+}
+
+// claudeArgs builds the arguments of the claude command: the conversation
+// to resume when the session is continued, the session's name, and what
+// the engineer configured.
+func claudeArgs(cfg config.Config, m session.Meta, continued bool) string {
+	var parts []string
+	if continued {
+		if m.ClaudeSession != "" {
+			parts = append(parts, "--resume", shellQuote(m.ClaudeSession))
+		} else {
+			parts = append(parts, "--continue")
+		}
+	}
+	if m.Name != "" {
+		parts = append(parts, "--name", shellQuote(m.Name))
+	}
+	if cfg.ClaudeArgs != "" {
+		parts = append(parts, cfg.ClaudeArgs)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " " + strings.Join(parts, " ")
+}
+
+func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeArguments string) error {
 	if !config.IsTCP(cfg.Sock) {
 		_ = os.Remove(cfg.Sock) // stale socket from a previous session
 	}
@@ -76,7 +182,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 	// name and any shell wrapper the user has around it still applies.
 	editor, err := tmuxRun("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", "pair",
 		"-x", cols, "-y", lines, "-c", cfg.Root,
-		"-e", "PAIR_SOCK="+cfg.Sock, "-e", "PAIR_ROOT="+cfg.Root, "-e", "PAIR_SESSION="+s,
+		"-e", "PAIR_SOCK="+cfg.Sock, "-e", "PAIR_ROOT="+cfg.Root, "-e", "PAIR_SESSION="+s, "-e", "PAIR_ACTIVE=1",
 		"-e", "PAIR_TMUX_SOCKET="+tmux.Socket, "-e", "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0")
 	if err != nil {
 		return err
@@ -120,7 +226,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 		" -c " + shellQuote("lua require('pair').layout()")
 	tailCmd := "clear; " + shellQuote(exe) + " log --follow"
 	presenceCmd := "clear; " + shellQuote(exe) + " presence"
-	claudeCmd := "clear; claude" + os.Getenv("PAIR_CLAUDE_ARGS")
+	claudeCmd := "clear; claude" + claudeArguments
 
 	keys := [][]string{
 		{"send-keys", "-t", editor, nvimCmd, "Enter"},
@@ -226,7 +332,11 @@ func Stop() error {
 	for _, p := range []string{"say", "rec"} {
 		_ = exec.Command("pkill", "-x", p).Run()
 	}
+	session.End(cfg.StateDir, time.Now())
 	_ = events.Open(cfg.StateDir).Session("○ pair session stopped")
+	if m, ok := session.Current(cfg.StateDir); ok {
+		fmt.Printf("session %q stopped. Continue it with `pair --continue`, see all with `pair sessions`.\n", m.Label())
+	}
 	return nil
 }
 

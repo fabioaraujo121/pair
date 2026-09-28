@@ -326,6 +326,30 @@ func TestAskWithAClosedMicrophoneWaitsForTheEngineer(t *testing.T) {
 	}
 }
 
+func TestOutsideAPairSessionTheToolsStaySilent(t *testing.T) {
+	s, sp, np, root := newTestServer(t)
+	s.Inactive = true
+	listener := &fakeListener{heard: speech.Heard{Text: "must not be used"}}
+	s.Listener = listener
+	sess := connect(t, s)
+	for name, args := range map[string]map[string]any{
+		"narrate": {"text": "I am about to change the model."},
+		"show":    {"file": "app/x.rb", "start_line": 1},
+		"ask":     {"question": "Sidekiq or Solid Queue?"},
+	} {
+		out, isErr := call(t, sess, name, args)
+		if isErr || !strings.Contains(out, "no pair session is running") {
+			t.Fatalf("%s: %q err=%v", name, out, isErr)
+		}
+	}
+	if len(sp.spoken) != 0 || len(np.calls) != 0 || listener.calls != 0 {
+		t.Fatalf("spoke %d, pointed %d, listened %d times", len(sp.spoken), len(np.calls), listener.calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".pair", "events.jsonl")); err == nil {
+		t.Fatal("nothing may be logged outside a session")
+	}
+}
+
 func TestSpeechIsSerialized(t *testing.T) {
 	s, sp, _, _ := newTestServer(t)
 	sp.delay = 60 * time.Millisecond
@@ -397,7 +421,7 @@ func TestStdioBinaryWithFakeSay(t *testing.T) {
 	}
 	root := t.TempDir()
 	cmd := exec.Command(bin, "mcp", "--root", root)
-	cmd.Env = append(os.Environ(), "PATH="+fakeDir+":"+os.Getenv("PATH"), "FAKE_SAY_DIR="+fakeDir, "PAIR_VOICE=Luciana", "PAIR_RATE=190")
+	cmd.Env = append(os.Environ(), "PATH="+fakeDir+":"+os.Getenv("PATH"), "FAKE_SAY_DIR="+fakeDir, "PAIR_VOICE=Luciana", "PAIR_RATE=190", "PAIR_ACTIVE=1", "PAIR_CUE=off")
 	cmd.Stderr = os.Stderr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

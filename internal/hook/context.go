@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fabioaraujo121/pair/internal/events"
+	"github.com/fabioaraujo121/pair/internal/session"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
@@ -107,6 +108,7 @@ func (h *Handler) Prompt(in *Input) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	h.startTurn()
+	session.NoteTitle(h.Cfg.StateDir, in.Prompt)
 	_ = h.Log.Session("› " + oneLine(in.Prompt, 120))
 	st := loadState(h.Cfg.StateDir)
 	candidates := h.candidates(ctx, st)

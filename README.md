@@ -121,7 +121,8 @@ In the session:
    and the mic opens for you.
 6. Edit files yourself whenever you like. Your next prompt carries a diff of
    what you changed by hand.
-7. `pair stop` ends the session. `pair replay` plays it back.
+7. `pair stop` ends the session. `pair --continue` picks it up again later,
+   `pair replay` plays it back.
 
 **The microphone is closed by default.** Nothing is recorded until you
 press `F5`/`F6` or click a button, and each press records one utterance,
@@ -132,6 +133,41 @@ The status bar always shows one of: `● Claude is working`, `🗣 Claude is
 speaking`, `❓ Claude is asking you`, `🎙 listening`, `○ your turn`, or
 `⚠ Claude needs you` when Claude Code is waiting on a permission prompt
 (press `F7` to see it).
+
+## Sessions
+
+Each `pair` starts a new session with a clean activity column and a new
+Claude Code conversation. Earlier sessions are kept, and can be listed,
+named, read, replayed, and opened again with Claude's conversation intact.
+
+```sh
+pair                          # a new session
+pair --name "checkout flow"   # a new session with a name
+pair --continue               # continue the last session
+pair sessions                 # list them
+pair resume checkout          # open one again, by id or part of its name
+pair rename checkout "checkout flow v2"
+pair log checkout             # read one as a conversation
+pair replay checkout          # play one back
+```
+
+```
+  ID               NAME                       STARTED        LENGTH  PROMPTS  EDITS
+▶ 20260928-142210  checkout flow              today 14:22       38m        6     12
+  20260928-103424  investigate landing page   today 10:34     1h12m        9      4
+```
+
+- A session without a name is listed by its first prompt.
+- Continuing or opening a session resumes the exact Claude Code
+  conversation it had, so what you see in the activity column is what
+  Claude remembers. The session's name is also given to Claude Code.
+- `PAIRING.md` and your code are shared by all sessions of the repository.
+- The running session writes to `.pair/events.jsonl`; the others live in
+  `.pair/sessions/<id>/`. Deleting a folder there deletes that session.
+
+Claude Code started any other way in the same repository (a plain `claude`
+in another terminal) is left alone: the hooks and the voice tools act only
+inside a pair session, and that conversation writes nothing to it.
 
 ## Keys
 
@@ -159,13 +195,17 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 
 | Command | Does |
 | --- | --- |
-| `pair` / `pair start` | create the session (editor, activity log, Claude strip) or attach |
+| `pair` / `pair start` | start a new session, or go back to the one that is running |
+| `pair --continue`, `pair --name <name>` | continue the last session; name the new one |
+| `pair sessions` | list the sessions of this repository |
+| `pair resume <id or name>` | open a past session again, with Claude's conversation |
+| `pair rename [<id or name>] <new name>` | name a session |
 | `pair init [--lang en] [--voice Samantha] [--rate 190]` | prepare the repository (see above) and save your voice settings |
 | `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
 | `pair claude` | show or hide Claude Code's pane (what `F7` runs) |
 | `pair stop` | kill the session and any running `say`/`rec` |
-| `pair replay [file] [--speed N] [--mute] [--no-nvim]` | play `.pair/events.jsonl` back: narrations spoken, jumps replayed |
-| `pair log [--follow] [file]` | the session as a conversation; this is what the activity column runs |
+| `pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]` | play a session back: narrations spoken, jumps replayed |
+| `pair log [--follow] [<id or name>]` | a session as a conversation; this is what the activity column runs |
 | `pair presence` | the animated state indicator; this is what the top right panel runs |
 | `pair mcp` | the MCP server (run by Claude Code) |
 | `pair hook <name>` | hook handlers (run by Claude Code, keymaps and hotkeys) |
@@ -244,7 +284,7 @@ for you and updates the language line in `CLAUDE.md`.
 | `PAIR_DIFF_LIMIT` | `200` | max diff lines injected at a prompt |
 | `PAIR_TTS` / `PAIR_STT` | `say` / `whisper` | adapters (see below) |
 | `PAIR_MUTE` | | log without speaking or listening (tests, demos) |
-| `PAIR_CLAUDE_ARGS` | | extra arguments appended to the `claude` command |
+| `PAIR_CLAUDE_ARGS` | | extra arguments for the `claude` command, for example `--model opus` |
 | `PAIR_TRACK_SCRATCHPAD` | | set to keep `PAIRING.md` out of `.gitignore` |
 | `PAIR_DEBUG` | | print hook errors to stderr |
 

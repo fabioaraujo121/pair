@@ -54,6 +54,7 @@ type Config struct {
 	LogWidth     string // PAIR_LOG_WIDTH
 	ClaudeHeight string // PAIR_CLAUDE_HEIGHT
 	ClaudeShown  bool   // PAIR_CLAUDE=shown starts with Claude's pane open
+	ClaudeArgs   string // PAIR_CLAUDE_ARGS: extra arguments for the claude command
 	Presence     string // PAIR_PRESENCE_HEIGHT
 	AskMic       string // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
 	AskWait      int    // PAIR_ASK_WAIT seconds
@@ -117,6 +118,7 @@ func Load(cwd string) Config {
 		LogWidth:     str("PAIR_LOG_WIDTH", DefaultLogWidth),
 		ClaudeHeight: str("PAIR_CLAUDE_HEIGHT", DefaultClaudeHeight),
 		ClaudeShown:  str("PAIR_CLAUDE", "hidden") == "shown",
+		ClaudeArgs:   strings.TrimSpace(str("PAIR_CLAUDE_ARGS", "")),
 		Presence:     str("PAIR_PRESENCE_HEIGHT", DefaultPresence),
 		AskMic:       str("PAIR_ASK_MIC", "manual"),
 		AskWait:      num("PAIR_ASK_WAIT", DefaultAskWait),
@@ -127,6 +129,11 @@ func Load(cwd string) Config {
 		Mute:         str("PAIR_MUTE", "") != "",
 	}
 }
+
+// Active reports whether the process runs inside a pair session. `pair
+// start` sets PAIR_ACTIVE for everything it launches; Claude Code started
+// any other way in the same repository must not write to the session.
+func Active() bool { return os.Getenv("PAIR_ACTIVE") != "" }
 
 // UserConfigPath is the per-user settings file.
 func UserConfigPath() string {
