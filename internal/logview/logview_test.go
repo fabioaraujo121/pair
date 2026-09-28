@@ -6,7 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// The viewer shows local times. The events below are stamped -03:00, so
+// the tests pin the local zone to that: what they check must not depend on
+// where they run.
+func pinZone(t *testing.T) {
+	t.Helper()
+	was := time.Local
+	time.Local = time.FixedZone("BRT", -3*60*60)
+	t.Cleanup(func() { time.Local = was })
+}
 
 func TestWrapBreaksAtWords(t *testing.T) {
 	lines := Wrap("ideas on how can we improve these secrets and where can we store them.", 24)
@@ -48,6 +59,7 @@ const session = `{"ts":"2026-09-28T11:46:00-03:00","type":"session_start","paylo
 `
 
 func TestConversationIsGroupedWrappedAndNotRepeated(t *testing.T) {
+	pinZone(t)
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	_ = os.WriteFile(path, []byte(session), 0o644)
 	var out bytes.Buffer
@@ -93,6 +105,7 @@ func TestConversationIsGroupedWrappedAndNotRepeated(t *testing.T) {
 }
 
 func TestOldLogsWithoutQuestionEvents(t *testing.T) {
+	pinZone(t)
 	path := filepath.Join(t.TempDir(), "events.jsonl")
 	_ = os.WriteFile(path, []byte(`{"ts":"2026-09-28T10:40:01-03:00","type":"ask","payload":{"text":"Where do we start?","answer":{"text":"Visual changes."}}}
 {"ts":"2026-09-28T10:41:01-03:00","type":"ask","payload":{"text":"Continue?","answer":{"text":"","dropped":"nobody answered within 3m0s"}}}

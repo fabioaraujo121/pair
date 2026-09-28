@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// The events in these tests are stamped -03:00; the sessions are started
+// in the same zone, so their order does not depend on where the tests run.
+var brt = time.FixedZone("BRT", -3*60*60)
+
 func write(t *testing.T, path, content string) {
 	t.Helper()
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
@@ -18,7 +22,7 @@ func write(t *testing.T, path, content string) {
 
 func TestNewSessionArchivesThePreviousOne(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".pair")
-	t0 := time.Date(2026, 9, 28, 10, 0, 0, 0, time.Local)
+	t0 := time.Date(2026, 9, 28, 10, 0, 0, 0, brt)
 
 	first, err := New(dir, "landing page", t0)
 	if err != nil {
@@ -68,7 +72,7 @@ func TestNewSessionArchivesThePreviousOne(t *testing.T) {
 
 func TestFindRenameRestore(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), ".pair")
-	t0 := time.Date(2026, 9, 28, 10, 0, 0, 0, time.Local)
+	t0 := time.Date(2026, 9, 28, 10, 0, 0, 0, brt)
 	a, _ := New(dir, "landing page", t0)
 	write(t, filepath.Join(dir, "events.jsonl"), `{"ts":"2026-09-28T10:00:05-03:00","type":"narrate","payload":{"text":"hello"}}`+"\n")
 	NoteClaude(dir, "claude-a")
@@ -143,7 +147,7 @@ func TestALogHoldingSeveralSessionsIsSplit(t *testing.T) {
 `)
 	write(t, filepath.Join(dir, "session.log"), "old text\n")
 
-	m, err := New(dir, "", time.Date(2026, 9, 28, 14, 0, 0, 0, time.Local))
+	m, err := New(dir, "", time.Date(2026, 9, 28, 14, 0, 0, 0, brt))
 	if err != nil {
 		t.Fatal(err)
 	}
