@@ -117,7 +117,7 @@ func (h *Handler) Prompt(in *Input) error {
 		}
 		st.Baselined = true
 		_ = saveState(h.Cfg.StateDir, st)
-		_ = h.Log.Append("prompt", map[string]any{"baselined": len(candidates), "chars": len(in.Prompt)})
+		_ = h.Log.Append("prompt", map[string]any{"baselined": len(candidates), "chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
 		return nil
 	}
 
@@ -129,7 +129,7 @@ func (h *Handler) Prompt(in *Input) error {
 	}
 	_ = saveState(h.Cfg.StateDir, st)
 	if len(changes) == 0 {
-		_ = h.Log.Append("prompt", map[string]any{"changes": 0, "chars": len(in.Prompt)})
+		_ = h.Log.Append("prompt", map[string]any{"chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
 		return nil
 	}
 
@@ -138,7 +138,7 @@ func (h *Handler) Prompt(in *Input) error {
 	for i, c := range changes {
 		names[i] = c.Path
 	}
-	_ = h.Log.Append("prompt", map[string]any{"changes": names, "truncated": truncated, "chars": len(in.Prompt)})
+	_ = h.Log.Append("prompt", map[string]any{"changes": names, "truncated": truncated, "chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
 	_ = h.Log.Session("✎ engineer changed: " + strings.Join(names, ", "))
 
 	out := map[string]any{

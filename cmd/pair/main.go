@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/term"
 
 	"github.com/fabioaraujo121/pair/internal/cli"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/hook"
+	"github.com/fabioaraujo121/pair/internal/logview"
 	"github.com/fabioaraujo121/pair/internal/mcpserver"
 	"github.com/fabioaraujo121/pair/internal/nvim"
 	"github.com/fabioaraujo121/pair/internal/replay"
@@ -40,6 +42,7 @@ Usage:
   pair hook point --file f --start n [--end m] [--note t]   point Claude at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
   pair replay [events.jsonl] [--speed N] [--mute] [--no-nvim]   play a session back
+  pair log [--follow] [events.jsonl]   the session as a conversation (the activity column)
   pair version
 
 Environment: PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
@@ -99,6 +102,8 @@ func main() {
 		err = serveMCP(args)
 	case "replay":
 		err = runReplay(args)
+	case "log":
+		err = runLog(args)
 	case "version", "-v", "--version":
 		fmt.Println("pair", version)
 	case "help", "-h", "--help":
@@ -178,4 +183,30 @@ func runReplay(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return replay.Run(ctx, events, opts)
+}
+
+// runLog shows the session as a conversation: `pair log [--follow] [file]`.
+func runLog(args []string) error {
+	root := os.Getenv("PAIR_ROOT")
+	cfg := config.Load(root)
+	path := filepath.Join(cfg.StateDir, "events.jsonl")
+	follow := false
+	for _, a := range args {
+		switch a {
+		case "--follow", "-f":
+			follow = true
+		default:
+			path = a
+		}
+	}
+	if follow {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return logview.Follow(ctx, path, cfg.Root, os.Stdout)
+	}
+	width := 80
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		width = w
+	}
+	return logview.Render(path, cfg.Root, os.Stdout, width, term.IsTerminal(int(os.Stdout.Fd())))
 }

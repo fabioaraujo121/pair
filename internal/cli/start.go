@@ -94,7 +94,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_CLAUDE", claude},
 		{"set-option", "-p", "-t", editor, "@pair_name", "files: what Claude reads and changes"},
 		{"set-option", "-p", "-t", logPane, "@pair_name", "activity: what Claude does and why"},
-		{"set-option", "-p", "-t", claude, "@pair_name", "claude: type here or press F5 to talk (F7 full screen)"},
+		{"set-option", "-p", "-t", claude, "@pair_name", "claude: type here, or F5 to talk · F7 full screen"},
 	}
 	steps = append(steps, sessionChrome(exe, claude)...)
 	for _, args := range steps {
@@ -108,7 +108,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log) error {
 		" --cmd " + shellQuote("let g:pair_bin='"+exe+"' | let g:pair_root='"+cfg.Root+"'") +
 		" --listen " + shellQuote(cfg.Sock) +
 		" -c " + shellQuote("lua require('pair').layout()")
-	tailCmd := "clear; tail -n 60 -f " + shellQuote(log.SessionLogPath())
+	tailCmd := "clear; " + shellQuote(exe) + " log --follow"
 	claudeCmd := "clear; claude" + os.Getenv("PAIR_CLAUDE_ARGS")
 
 	keys := [][]string{
@@ -133,6 +133,9 @@ func sessionChrome(exe, claudePane string) [][]string {
 	interrupt := shellQuote(exe) + " hook interrupt >/dev/null 2>&1"
 	return [][]string{
 		{"set-option", "-g", "mouse", "on"},
+		// Full colour for Neovim's syntax highlighting.
+		{"set-option", "-g", "default-terminal", "tmux-256color"},
+		{"set-option", "-as", "terminal-features", ",*:RGB"},
 		{"set-option", "-g", "escape-time", "10"},
 		{"set-option", "-g", "focus-events", "on"},
 		{"set-option", "-g", "pane-border-status", "top"},

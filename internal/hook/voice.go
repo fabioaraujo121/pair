@@ -131,6 +131,9 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 		heard.Dropped, heard.Text = "same sentence as a moment ago, not sent twice", ""
 		payload["heard"] = heard
 	}
+	if asked && heard.Text != "" {
+		payload["answers"] = true
+	}
 	_ = log.Append("listen", payload)
 	if heard.Text == "" {
 		_ = log.Session("🎙 (nothing sent: " + heard.Dropped + ")")

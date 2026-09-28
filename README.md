@@ -9,26 +9,28 @@ speech, whisper.cpp for listening, tmux for the layout, Claude Code hooks
 and MCP tools for the events. No cloud, no daemon, no fork of Claude Code.
 
 ```
-┌───────────────────────────────────────────┬──────────────────────────────┐
-│ files: what Claude reads and changes      │ activity: what and why       │
-│  ▸ app/        │ 11 class User            │ 10:14 › add email validation │
-│  ▾ models/     │▶12   validates :email    │ 10:14 🗣 I'll add the         │
-│     user.rb    │▶13     presence: true    │       validation in the      │
-│  ▸ spec/       │ 14 end                   │       model, the controller  │
-│                ├──────────────────────────│       accepts empty emails.  │
-│                │ PAIRING.md               │ 10:14 → user.rb:12-13        │
-├────────────────┴──────────────────────────┤ 10:14 ✎ user.rb (+2 −0)      │
-│ claude: type here or press F5 to talk     │ 10:15 ❓ Sidekiq or Solid     │
-│ ❯                                         │       Queue?                 │
-│                                           │ 10:15 👤 Solid Queue.        │
-└───────────────────────────────────────────┴──────────────────────────────┘
- pair  ● Claude is working: editing user.rb        F5 talk · F6 interrupt · F7 Claude full screen
+┌─ files: what Claude reads and changes ───────┬─ activity: what and why ────┐
+│  ▸ app/        │  9   def valid?             │ you  10:14                  │
+│  ▾ models/     │    -     !name.empty?       │   add email validation      │
+│     user.rb    │+ 10     return false if …   │                             │
+│  ▸ spec/       │+ 11                         │ claude  10:14               │
+│                │+ 12     email.include?("@") │   I'll add the validation   │
+│                │  13   end                   │   in the model, because the │
+│                ├─────────────────────────────│   controller accepts empty  │
+│                │ PAIRING.md                  │   emails.                   │
+│                │ ## Plan                     │   ✎ app/models/user.rb +3 −1│
+├─ claude: type here, or F5 to talk ───────────┤                             │
+│ ❯                                            │ claude asks  10:15          │
+└──────────────────────────────────────────────┴─────────────────────────────┘
+ pair ● Claude is working: editing user.rb    🎙 talk F5  ✋ interrupt F6  claude F7
 ```
 
 The screen answers three questions: is Claude running (the status bar),
 which files is it changing (Neovim, the main area), and why (the activity
-log). Claude Code's own pane is a strip under the editor: it is where you
-type and answer permission prompts, not what you watch.
+log). Claude Code's own pane is a strip of a few lines under the editor:
+it is where you type, not what you watch. When Claude waits on a permission
+prompt the strip grows by itself so you can read and answer, and shrinks
+back when work resumes.
 
 Status: v0, milestones 1 to 5 of the [PRD](PRD.md) implemented. Everything
 below was verified against Claude Code 2.1.282 on macOS 26 (see
@@ -89,8 +91,8 @@ In the session:
 3. Before every `Edit`/`Write`, Neovim jumps to the spot and highlights what
    is about to change. After it, the change is drawn inside the file:
    added lines are highlighted with a `+` in the margin, removed lines are
-   shown in place, prefixed with `-`. The log gets `✎ file (+added
-   −removed)` and the first lines of the diff.
+   shown in place, prefixed with `-`. The activity column gets a card:
+   `✎ file +added −removed`.
 4. When something is ambiguous Claude calls `ask`: a distinct sound, then
    the question. The microphone stays closed. Press `F5` or click `🎙 talk`
    to answer; the transcript goes back to Claude as the answer and the
@@ -142,6 +144,7 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
 | `pair stop` | kill the session and any running `say`/`rec` |
 | `pair replay [file] [--speed N] [--mute] [--no-nvim]` | play `.pair/events.jsonl` back: narrations spoken, jumps replayed |
+| `pair log [--follow] [file]` | the session as a conversation; this is what the activity column runs |
 | `pair mcp` | the MCP server (run by Claude Code) |
 | `pair hook <name>` | hook handlers (run by Claude Code, keymaps and hotkeys) |
 
@@ -177,8 +180,14 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 - **Listening** decides "(no answer)" from the audio (too short, too quiet,
   no file) before whisper runs, and drops whisper's stock inventions for
   silence such as "Obrigado.".
-- **Events** go to `.pair/events.jsonl` (`{ts, type, payload}`), the log
-  pane tails `.pair/session.log`.
+- **Events** go to `.pair/events.jsonl` (`{ts, type, payload}`). The
+  activity column renders that file as a conversation (`pair log
+  --follow`): grouped by speaker, wrapped at word boundaries for the width
+  of the pane, with what you said shown once. A plain-text copy goes to
+  `.pair/session.log`.
+- **Neovim without a config of your own** gets line numbers, mouse support,
+  a colourful built-in theme and syntax highlighting. With your own config,
+  pair changes none of that.
 
 ## Configuration
 
@@ -203,8 +212,9 @@ for you and updates the language line in `CLAUDE.md`.
 | `PAIR_SESSION` | `pair` | tmux session name |
 | `PAIR_TMUX_SOCKET` | `pair` | name of pair's tmux server |
 | `PAIR_LOG_WIDTH` | `36%` | width of the activity log |
-| `PAIR_CLAUDE_HEIGHT` | `30%` | height of Claude's strip |
-| `PAIR_LOG_DIFF_LINES` | `30` | diff lines shown per edit in the log (`0` = summary only) |
+| `PAIR_CLAUDE_HEIGHT` | `8` | height of Claude's strip, in lines or as a percentage |
+| `PAIR_CLAUDE_GROWN` | `50%` | its height while Claude waits on a permission prompt |
+| `PAIR_COLORSCHEME` | `retrobox` | Neovim colour scheme, applied only when you have no Neovim config |
 | `PAIR_SOCK` | `$TMPDIR/pair-<repo hash>.sock` | Neovim listen address (≤ 104 bytes, or `127.0.0.1:<port>`) |
 | `PAIR_HIGHLIGHT_TTL` | `20` | seconds before the "about to change" highlight clears |
 | `PAIR_DIFF_TTL` | `120` | seconds a drawn change stays visible in Neovim (`0` = until the next one) |

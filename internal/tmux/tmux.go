@@ -172,3 +172,11 @@ func SendEscape(session string) error {
 	_, err := Run("send-keys", "-t", ClaudePane(session), "Escape")
 	return err
 }
+
+// ResizeClaude sets the height of Claude's pane (lines or a percentage).
+func ResizeClaude(session, height string) {
+	if session == "" || height == "" {
+		return
+	}
+	_, _ = Run("resize-pane", "-t", ClaudePane(session), "-y", height)
+}

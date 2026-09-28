@@ -172,3 +172,11 @@ func (m Marks) summary() string {
 	}
 	return fmt.Sprintf("+%d −%d", len(m.Added), removed)
 }
+
+// counts returns the number of added and removed lines.
+func (m Marks) counts() (added, removed int) {
+	for _, r := range m.Removed {
+		removed += len(r.Lines)
+	}
+	return len(m.Added), removed
+}

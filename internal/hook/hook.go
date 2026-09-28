@@ -5,7 +5,6 @@
 package hook
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
@@ -43,11 +41,16 @@ type Input struct {
 
 // ToolInput covers the Edit and Write tools.
 type ToolInput struct {
-	FilePath   string `json:"file_path"`
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
-	Content    string `json:"content"`
+	Command     string `json:"command"`     // Bash
+	Description string `json:"description"` // Bash, Agent
+	Pattern     string `json:"pattern"`     // Grep, Glob
+	URL         string `json:"url"`         // WebFetch
+	Query       string `json:"query"`       // WebSearch
+	FilePath    string `json:"file_path"`
+	OldString   string `json:"old_string"`
+	NewString   string `json:"new_string"`
+	ReplaceAll  bool   `json:"replace_all"`
+	Content     string `json:"content"`
 }
 
 // Parse decodes hook input. An empty stdin yields an empty Input, not an
@@ -98,8 +101,10 @@ func Run(name string, stdin io.Reader, stdout io.Writer) error {
 		return h.Prompt(in)
 	case "notify":
 		return h.Notify(in)
+	case "activity":
+		return h.Activity(in)
 	default:
-		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify)", name)
+		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify, activity)", name)
 	}
 }
 
@@ -150,26 +155,24 @@ func (h *Handler) PostEdit(in *Input) error {
 	ctx := context.Background()
 	nvErr := h.Nvim.Reload(ctx)
 	drawn := ""
-	if file != "" && nvErr == nil {
-		if m := h.marks(ctx, in, file); !m.Empty() {
-			if data, err := json.Marshal(m); err == nil {
-				if err := h.Nvim.Diff(ctx, file, string(data)); err != nil {
-					nvErr = err
-				} else {
-					drawn = m.summary()
-				}
+	var marks Marks
+	if file != "" {
+		marks = h.marks(ctx, in, file)
+	}
+	if file != "" && nvErr == nil && !marks.Empty() {
+		if data, err := json.Marshal(marks); err == nil {
+			if err := h.Nvim.Diff(ctx, file, string(data)); err != nil {
+				nvErr = err
+			} else {
+				drawn = marks.summary()
 			}
 		}
 	}
+	added, removed := 0, 0
 	if file != "" {
 		h.state(tmux.StateWorking, "edited "+h.rel(file))
-		summary, diff := h.renderDiff(ctx, file)
-		if summary != "" {
-			_ = h.Log.Session(summary)
-		}
-		if diff != "" {
-			_ = h.Log.SessionRaw([]byte(diff))
-		}
+		added, removed = marks.counts()
+		_ = h.Log.Session(fmt.Sprintf("✎ %s (+%d −%d)", h.rel(file), added, removed))
 	}
 	if file != "" {
 		// Remember the file as Claude left it, so the next prompt can report
@@ -178,7 +181,7 @@ func (h *Handler) PostEdit(in *Input) error {
 		Snapshot(h.Cfg.StateDir, &st, file)
 		_ = saveState(h.Cfg.StateDir, st)
 	}
-	payload := map[string]any{"tool": in.ToolName, "file": file}
+	payload := map[string]any{"tool": in.ToolName, "file": file, "added": added, "removed": removed}
 	if drawn != "" {
 		payload["drawn"] = drawn
 	}
@@ -211,16 +214,64 @@ func (h *Handler) Notify(in *Input) error {
 		h.state(tmux.StateIdle, "")
 		return nil
 	}
-	_ = h.Log.Session("⚠ Claude needs you: " + msg + " (F7 shows Claude's pane)")
-	h.state(tmux.StateAttention, msg)
+	_ = h.Log.Session("⚠ Claude needs you: " + msg)
+	tmux.SetState(h.Cfg.Session, tmux.StateAttention, msg)
+	// Make room to read and answer the prompt; the strip shrinks back on
+	// the next sign of activity.
+	tmux.ResizeClaude(h.Cfg.Session, h.Cfg.ClaudeGrown)
+	_ = os.WriteFile(h.grownMarker(), nil, 0o644)
 	chime("Funk")
 	return nil
 }
 
-// state updates the status bar indicator of the running session.
+// Activity runs before every tool call and keeps the status bar saying
+// what Claude is doing. It writes nothing to the log.
+func (h *Handler) Activity(in *Input) error {
+	detail := ""
+	ti := in.ToolInput
+	switch {
+	case strings.HasPrefix(in.ToolName, "mcp__pair__"):
+		return nil // narrate, show and ask report their own state
+	case in.ToolName == "Read":
+		detail = "reading " + h.rel(h.absPath(ti.FilePath))
+	case in.ToolName == "Edit" || in.ToolName == "Write":
+		detail = "editing " + h.rel(h.absPath(ti.FilePath))
+	case in.ToolName == "Bash":
+		detail = "running " + firstNonEmpty(ti.Description, ti.Command)
+	case in.ToolName == "Grep" || in.ToolName == "Glob":
+		detail = "searching " + ti.Pattern
+	case in.ToolName == "WebFetch" || in.ToolName == "WebSearch":
+		detail = "looking up " + firstNonEmpty(ti.URL, ti.Query)
+	case in.ToolName == "Agent" || in.ToolName == "Task":
+		detail = "delegating " + ti.Description
+	case strings.HasPrefix(in.ToolName, "mcp__"):
+		detail = "using " + strings.TrimPrefix(in.ToolName, "mcp__")
+	default:
+		detail = strings.ToLower(in.ToolName)
+	}
+	h.state(tmux.StateWorking, detail)
+	return nil
+}
+
+func firstNonEmpty(a, b string) string {
+	if strings.TrimSpace(a) != "" {
+		return a
+	}
+	return b
+}
+
+// state updates the status bar indicator of the running session and gives
+// the screen back to the editor once Claude no longer waits on the
+// engineer.
 func (h *Handler) state(kind, detail string) {
 	tmux.SetState(h.Cfg.Session, kind, detail)
+	if _, err := os.Stat(h.grownMarker()); err == nil {
+		_ = os.Remove(h.grownMarker())
+		tmux.ResizeClaude(h.Cfg.Session, h.Cfg.ClaudeHeight)
+	}
 }
+
+func (h *Handler) grownMarker() string { return filepath.Join(h.Cfg.StateDir, "claude_grown") }
 
 // LocateRange returns the 1-based first and last line of the first
 // occurrence of old in content. found is false when old is empty or absent,
@@ -253,70 +304,6 @@ func (h *Handler) rel(p string) string {
 		return r
 	}
 	return p
-}
-
-// renderDiff returns a one-line summary ("✎ path (+3 −1)") and the
-// working-tree diff of file, through delta when it is installed and capped
-// at LogDiffLines lines so narrations stay visible in the activity log.
-// Untracked files are diffed against /dev/null.
-func (h *Handler) renderDiff(ctx context.Context, file string) (summary, diff string) {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	git := func(args ...string) []byte {
-		out, _ := exec.CommandContext(ctx, "git", append([]string{"-C", h.Cfg.Root}, args...)...).Output()
-		return out
-	}
-	out := git("diff", "--no-color", "--", file)
-	if len(bytes.TrimSpace(out)) == 0 {
-		if len(bytes.TrimSpace(git("ls-files", "--", file))) == 0 {
-			// untracked: git exits 1 when there are differences, Output still has them
-			out = git("diff", "--no-color", "--no-index", "--", "/dev/null", file)
-		}
-	}
-	if len(bytes.TrimSpace(out)) == 0 {
-		return "✎ " + h.rel(file) + " (no change against git)", ""
-	}
-	added, removed := 0, 0
-	for _, line := range strings.Split(string(out), "\n") {
-		switch {
-		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-		case strings.HasPrefix(line, "+"):
-			added++
-		case strings.HasPrefix(line, "-"):
-			removed++
-		}
-	}
-	summary = fmt.Sprintf("✎ %s (+%d −%d)", h.rel(file), added, removed)
-	limit := h.Cfg.LogDiffLines
-	if limit <= 0 || filepath.Base(file) == "PAIRING.md" {
-		return summary, "" // the scratchpad is already on screen
-	}
-	if delta, err := exec.LookPath("delta"); err == nil {
-		args := []string{"--paging=never", "--file-style=omit", "--hunk-header-style=omit", "--keep-plus-minus-markers"}
-		if w := h.paneWidth(ctx); w != "" {
-			args = append(args, "--width", w)
-		}
-		cmd := exec.CommandContext(ctx, delta, args...)
-		cmd.Stdin = bytes.NewReader(out)
-		if rendered, err := cmd.Output(); err == nil && len(rendered) > 0 {
-			out = rendered
-		}
-	}
-	lines := strings.Split(strings.Trim(string(out), "\n"), "\n")
-	if len(lines) > limit {
-		more := len(lines) - limit
-		lines = append(lines[:limit], fmt.Sprintf("   … %d more lines, see the file in the editor", more))
-	}
-	return summary, strings.Join(lines, "\n") + "\n"
-}
-
-// paneWidth asks tmux how wide the log pane is so delta wraps correctly.
-func (h *Handler) paneWidth(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "tmux", tmux.Args("display", "-p", "-t", tmux.Pane(h.Cfg.Session, tmux.RoleLog), "#{pane_width}")...).Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // chime plays a short system sound in its own session so the hook can exit

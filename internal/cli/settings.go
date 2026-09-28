@@ -17,6 +17,7 @@ type hookSpec struct {
 
 // MultiEdit is gone from Claude Code 2.1.x, so the matcher is Edit|Write.
 var hookSpecs = []hookSpec{
+	{"PreToolUse", "", "activity", 5}, // every tool: keeps the status bar saying what Claude is doing
 	{"PreToolUse", "Edit|Write", "pre_edit", 10},
 	{"PostToolUse", "Edit|Write", "post_edit", 15},
 	{"UserPromptSubmit", "", "prompt", 20}, // default for this event is 30 s; output is discarded on timeout
@@ -24,7 +25,7 @@ var hookSpecs = []hookSpec{
 	{"Notification", "", "notify", 10}, // permission prompts must reach someone not watching Claude's pane
 }
 
-// mcpTools are pre-approved so narrate/ask/show never prompt (milestone 2).
+// mcpTools are pre-approved so narrate/ask/show never prompt.
 var mcpTools = []string{"mcp__pair__narrate", "mcp__pair__ask", "mcp__pair__show"}
 
 // ourHook matches commands written by a previous `pair init`, whatever the
@@ -46,32 +47,12 @@ func MergeSettings(existing []byte, exe string) ([]byte, error) {
 	if hooks == nil {
 		hooks = map[string]any{}
 	}
+	cleaned := map[string]bool{}
 	for _, spec := range hookSpecs {
 		groups, _ := hooks[spec.Event].([]any)
-		kept := make([]any, 0, len(groups)+1)
-		for _, g := range groups {
-			gm, ok := g.(map[string]any)
-			if !ok {
-				kept = append(kept, g)
-				continue
-			}
-			entries, _ := gm["hooks"].([]any)
-			rest := make([]any, 0, len(entries))
-			for _, e := range entries {
-				if em, ok := e.(map[string]any); ok {
-					if cmd, _ := em["command"].(string); ourHook.MatchString(cmd) {
-						continue
-					}
-				}
-				rest = append(rest, e)
-			}
-			if len(rest) == 0 && len(entries) > 0 {
-				continue // the group only held our hooks
-			}
-			if len(entries) > 0 {
-				gm["hooks"] = rest
-			}
-			kept = append(kept, gm)
+		if !cleaned[spec.Event] { // drop what an earlier run wrote, once per event
+			groups = withoutOurs(groups)
+			cleaned[spec.Event] = true
 		}
 		group := map[string]any{
 			"hooks": []any{map[string]any{
@@ -83,7 +64,7 @@ func MergeSettings(existing []byte, exe string) ([]byte, error) {
 		if spec.Matcher != "" {
 			group["matcher"] = spec.Matcher
 		}
-		hooks[spec.Event] = append(kept, group)
+		hooks[spec.Event] = append(groups, group)
 	}
 	settings["hooks"] = hooks
 
@@ -105,6 +86,37 @@ func MergeSettings(existing []byte, exe string) ([]byte, error) {
 		return nil, err
 	}
 	return append(out, '\n'), nil
+}
+
+// withoutOurs removes pair's hook entries from the groups of one event and
+// the groups that held nothing else.
+func withoutOurs(groups []any) []any {
+	kept := make([]any, 0, len(groups)+2)
+	for _, g := range groups {
+		gm, ok := g.(map[string]any)
+		if !ok {
+			kept = append(kept, g)
+			continue
+		}
+		entries, _ := gm["hooks"].([]any)
+		rest := make([]any, 0, len(entries))
+		for _, e := range entries {
+			if em, ok := e.(map[string]any); ok {
+				if cmd, _ := em["command"].(string); ourHook.MatchString(cmd) {
+					continue
+				}
+			}
+			rest = append(rest, e)
+		}
+		if len(rest) == 0 && len(entries) > 0 {
+			continue
+		}
+		if len(entries) > 0 {
+			gm["hooks"] = rest
+		}
+		kept = append(kept, gm)
+	}
+	return kept
 }
 
 func containsString(list []any, s string) bool {

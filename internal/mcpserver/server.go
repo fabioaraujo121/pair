@@ -238,6 +238,7 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 	defer s.speech.Unlock()
 	defer s.setState(tmux.StateWorking, "")
 	_ = s.Log.Session("❓ " + strings.TrimSpace(in.Question))
+	_ = s.Log.Append("question", map[string]any{"text": in.Question})
 	rec, err := s.speakLocked(ctx, in.Question, KindAsk)
 	if err != nil {
 		_ = s.Log.Append("ask", rec)

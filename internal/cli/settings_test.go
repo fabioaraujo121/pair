@@ -30,10 +30,13 @@ func TestMergeSettingsFromScratchIsIdempotent(t *testing.T) {
 	m := decode(t, first)
 	hooks := m["hooks"].(map[string]any)
 	pre := hooks["PreToolUse"].([]any)
-	if len(pre) != 1 {
-		t.Fatalf("PreToolUse groups = %d", len(pre))
+	if len(pre) != 2 {
+		t.Fatalf("PreToolUse groups = %d, want activity + pre_edit", len(pre))
 	}
-	g := pre[0].(map[string]any)
+	if _, has := pre[0].(map[string]any)["matcher"]; has {
+		t.Fatal("the activity hook covers every tool: no matcher")
+	}
+	g := pre[1].(map[string]any)
 	if g["matcher"] != "Edit|Write" {
 		t.Fatalf("matcher = %v", g["matcher"])
 	}
@@ -79,8 +82,8 @@ func TestMergeSettingsPreservesOtherHooksAndReplacesOurs(t *testing.T) {
 		t.Fatalf("allow = %v", allow)
 	}
 	pre := m["hooks"].(map[string]any)["PreToolUse"].([]any)
-	if len(pre) != 3 {
-		t.Fatalf("PreToolUse groups = %d, want audit + lint + ours: %s", len(pre), out)
+	if len(pre) != 4 {
+		t.Fatalf("PreToolUse groups = %d, want audit + lint + our two: %s", len(pre), out)
 	}
 	if pre[0].(map[string]any)["matcher"] != "Bash" {
 		t.Fatal("audit group must be first and untouched")
