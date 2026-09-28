@@ -72,13 +72,13 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 	if out, err := exec.Command("say", "-v", "?").Output(); err == nil {
 		voices := string(out)
 		if strings.Contains(voices, cfg.Voice+" ") {
-			detail := cfg.Voice
+			detail := cfg.Voice + ", language " + cfg.Lang
 			if cfg.Voice == "Luciana" {
 				detail += " (stock voice is the basic tier; download \"Luciana (Enhanced)\" under System Settings → Accessibility → Spoken Content → Manage Voices)"
 			}
 			checks = append(checks, check{"voice", false, true, detail})
 		} else {
-			checks = append(checks, check{"voice", false, false, cfg.Voice + " not installed; see System Settings → Accessibility → Spoken Content"})
+			checks = append(checks, check{"voice", false, false, cfg.Voice + " not installed; list voices with `say -v '?'`, choose one with `pair init --voice <name>`, or download it under System Settings → Accessibility → Spoken Content"})
 		}
 	}
 

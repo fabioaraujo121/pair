@@ -24,6 +24,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
 	"github.com/fabioaraujo121/pair/internal/speech"
+	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
 // MaxChars is the ceiling for narrate, ask and show notes. It is a safety
@@ -45,7 +46,17 @@ type Server struct {
 	Version  string
 	Vocab    map[string]string
 
-	speech sync.Mutex // serializes speaking and listening: never both at once
+	// Cue calls for the engineer's attention before speech: pairing has
+	// long quiet stretches, and a sentence that starts unannounced is half
+	// missed. It runs before every question and before a narration that
+	// follows CueIdle of silence. nil disables it.
+	Cue     func(ctx context.Context, kind string)
+	CueIdle time.Duration
+	// State reports what is happening to the status bar. nil disables it.
+	State func(state, detail string)
+
+	speech     sync.Mutex // serializes speaking and listening: never both at once
+	lastSpeech time.Time
 }
 
 // New wires the adapters selected by the configuration (PAIR_TTS,
@@ -60,14 +71,47 @@ func New(cfg config.Config, version string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	srv := &Server{
 		Cfg:      cfg,
 		Log:      events.Open(cfg.StateDir),
 		Speaker:  speaker,
 		Listener: listener,
 		Nvim:     nvim.New(cfg.Sock),
 		Version:  version,
-	}, nil
+		Vocab:    speech.VocabularyFor(cfg.Lang),
+		CueIdle:  time.Duration(cfg.CueIdle) * time.Second,
+		State:    func(state, detail string) { tmux.SetState(cfg.Session, state, detail) },
+	}
+	if cfg.Cue && !cfg.Mute {
+		srv.Cue = AttentionSound
+	}
+	return srv, nil
+}
+
+// Kinds of speech, for the cue and the status bar.
+const (
+	KindNarrate = "narrate"
+	KindAsk     = "ask"
+)
+
+// AttentionSound is the default cue: a distinct system sound for
+// narrations and for questions, then a beat of silence before the voice.
+func AttentionSound(ctx context.Context, kind string) {
+	sound := "/System/Library/Sounds/Ping.aiff"
+	if kind == KindAsk {
+		sound = "/System/Library/Sounds/Hero.aiff"
+	}
+	speech.PlaySound(ctx, sound)
+	select {
+	case <-time.After(350 * time.Millisecond):
+	case <-ctx.Done():
+	}
+}
+
+func (s *Server) setState(state, detail string) {
+	if s.State != nil {
+		s.State(state, detail)
+	}
 }
 
 // NarrateInput is the argument of the narrate tool.
@@ -115,9 +159,9 @@ func (s *Server) narrate(ctx context.Context, _ *mcp.CallToolRequest, in Narrate
 	if err := checkLength("narrate", in.Text); err != nil {
 		return nil, nil, err
 	}
-	rec, err := s.speak(ctx, in.Text)
-	_ = s.Log.Append("narrate", rec)
 	_ = s.Log.Session("🗣 " + strings.TrimSpace(in.Text))
+	rec, err := s.speak(ctx, in.Text, KindNarrate)
+	_ = s.Log.Append("narrate", rec)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,7 +209,7 @@ func (s *Server) show(ctx context.Context, _ *mcp.CallToolRequest, in ShowInput)
 	_ = s.Log.Session(line)
 
 	if in.Note != "" {
-		if _, err := s.speak(ctx, in.Note); err != nil {
+		if _, err := s.speak(ctx, in.Note, KindNarrate); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -183,12 +227,14 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 	}
 	s.speech.Lock()
 	defer s.speech.Unlock()
-	rec, err := s.speakLocked(ctx, in.Question)
-	_ = s.Log.Session("? " + strings.TrimSpace(in.Question))
+	defer s.setState(tmux.StateWorking, "")
+	_ = s.Log.Session("❓ " + strings.TrimSpace(in.Question))
+	rec, err := s.speakLocked(ctx, in.Question, KindAsk)
 	if err != nil {
 		_ = s.Log.Append("ask", rec)
 		return nil, nil, err
 	}
+	s.setState(tmux.StateListening, "")
 	start := time.Now()
 	heard, lerr := s.Listener.Listen(ctx)
 	rec["answer"] = heard
@@ -216,21 +262,34 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 
 // speak normalizes and speaks under the speech mutex, returning the event
 // payload to log.
-func (s *Server) speak(ctx context.Context, raw string) (map[string]any, error) {
+func (s *Server) speak(ctx context.Context, raw, kind string) (map[string]any, error) {
 	s.speech.Lock()
 	defer s.speech.Unlock()
-	return s.speakLocked(ctx, raw)
+	defer s.setState(tmux.StateWorking, "")
+	return s.speakLocked(ctx, raw, kind)
 }
 
-func (s *Server) speakLocked(ctx context.Context, raw string) (map[string]any, error) {
+func (s *Server) speakLocked(ctx context.Context, raw, kind string) (map[string]any, error) {
 	spoken := speech.Normalize(raw, s.Vocab)
+	state := tmux.StateSpeaking
+	if kind == KindAsk {
+		state = tmux.StateAsking
+	}
+	s.setState(state, "")
+	cued := false
+	if s.Cue != nil && (kind == KindAsk || s.lastSpeech.IsZero() || time.Since(s.lastSpeech) > s.CueIdle) {
+		s.Cue(ctx, kind)
+		cued = true
+	}
 	start := time.Now()
 	err := s.Speaker.Speak(ctx, spoken)
+	s.lastSpeech = time.Now()
 	rec := map[string]any{
 		"text":   raw,
 		"spoken": spoken,
 		"chars":  utf8.RuneCountInString(raw),
 		"ms":     time.Since(start).Milliseconds(),
+		"cued":   cued,
 	}
 	if err != nil {
 		if ctx.Err() != nil || errors.Is(err, speech.ErrInterrupted) {

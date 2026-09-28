@@ -61,3 +61,48 @@ func TestEnvOverrides(t *testing.T) {
 		t.Fatalf("overrides not applied: %+v", c)
 	}
 }
+
+func TestConfigFilesAndPrecedence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, k := range []string{"PAIR_LANG", "PAIR_VOICE", "PAIR_RATE"} {
+		t.Setenv(k, "")
+	}
+	repo := t.TempDir()
+	_ = os.Mkdir(filepath.Join(repo, ".git"), 0o755)
+
+	c := Load(repo)
+	if c.Lang != "en" || c.Voice != "Samantha" || c.Rate != 190 {
+		t.Fatalf("defaults: %+v", c)
+	}
+
+	if err := SaveUser(map[string]string{"PAIR_LANG": "pt", "PAIR_VOICE": "Luciana"}); err != nil {
+		t.Fatal(err)
+	}
+	c = Load(repo)
+	if c.Lang != "pt" || c.Voice != "Luciana" {
+		t.Fatalf("user config not applied: %+v", c)
+	}
+
+	// The repository file beats the user file; the environment beats both.
+	_ = os.MkdirAll(filepath.Join(repo, ".pair"), 0o755)
+	_ = os.WriteFile(filepath.Join(repo, ".pair", "config"), []byte("# repo\nexport PAIR_LANG=\"es\"\nPAIR_RATE=170\n"), 0o644)
+	c = Load(repo)
+	if c.Lang != "es" || c.Rate != 170 || c.Voice != "Luciana" {
+		t.Fatalf("repo config: %+v", c)
+	}
+	t.Setenv("PAIR_LANG", "fr")
+	if c = Load(repo); c.Lang != "fr" {
+		t.Fatalf("environment must win: %+v", c)
+	}
+
+	// SaveUser updates in place and keeps other keys and comments.
+	if err := SaveUser(map[string]string{"PAIR_VOICE": "Samantha"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(UserConfigPath())
+	text := string(data)
+	if strings.Count(text, "PAIR_VOICE=") != 1 || !strings.Contains(text, "PAIR_VOICE=Samantha") || !strings.Contains(text, "PAIR_LANG=pt") || !strings.HasPrefix(text, "#") {
+		t.Fatalf("user config file:\n%s", text)
+	}
+}

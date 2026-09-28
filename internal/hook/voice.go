@@ -52,24 +52,38 @@ func listenAndInject(cfg config.Config, out io.Writer) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.AskMax+30)*time.Second)
 	defer cancel()
+	inSession := tmux.HasSession(cfg.Session)
+	if inSession {
+		tmux.SetState(cfg.Session, tmux.StateListening, "")
+	}
 	heard, err := listener.Listen(ctx)
+	if inSession {
+		tmux.SetState(cfg.Session, tmux.StateIdle, "")
+	}
 	payload := map[string]any{"heard": heard}
 	if err != nil {
 		payload["error"] = err.Error()
 		_ = log.Append("listen", payload)
+		if inSession {
+			tmux.Message(cfg.Session, "🎙 could not listen: "+err.Error())
+		}
 		return err
 	}
 	_ = log.Append("listen", payload)
 	if heard.Text == "" {
 		_ = log.Session("🎙 (nothing heard: " + heard.Dropped + ")")
+		if inSession {
+			tmux.Message(cfg.Session, "🎙 nothing heard: "+heard.Dropped)
+		}
 		fmt.Fprintf(out, "(nothing heard: %s)\n", heard.Dropped)
 		return nil
 	}
 	_ = log.Session("🎙 " + heard.Text)
-	if tmux.HasSession(cfg.Session) {
+	if inSession {
 		if err := tmux.SendPrompt(cfg.Session, heard.Text); err != nil {
 			return fmt.Errorf("transcribed %q but could not send it to Claude: %v", heard.Text, err)
 		}
+		tmux.Message(cfg.Session, "🎙 sent: "+heard.Text)
 	}
 	fmt.Fprintln(out, heard.Text)
 	return nil

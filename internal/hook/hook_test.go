@@ -137,7 +137,7 @@ func TestPostEditReloadsAndRendersDiff(t *testing.T) {
 	_ = os.WriteFile(file, []byte("one\nTWO\n"), 0o644)
 
 	fn := &fakeNvim{}
-	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), Session: "no-such-session"}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: fn}
+	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), Session: "no-such-session", LogDiffLines: 30}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: fn}
 	if err := h.PostEdit(&Input{ToolName: "Edit", ToolInput: ToolInput{FilePath: file}}); err != nil {
 		t.Fatal(err)
 	}
@@ -145,8 +145,8 @@ func TestPostEditReloadsAndRendersDiff(t *testing.T) {
 		t.Fatalf("reloads = %d", fn.reloads)
 	}
 	log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log"))
-	if !strings.Contains(string(log), "TWO") {
-		t.Fatalf("diff not rendered into session.log:\n%s", log)
+	if !strings.Contains(string(log), "TWO") || !strings.Contains(string(log), "✎ sample.txt (+1 −1)") {
+		t.Fatalf("summary and diff not rendered into session.log:\n%s", log)
 	}
 
 	// Untracked file: diffed against /dev/null.
@@ -158,5 +158,62 @@ func TestPostEditReloadsAndRendersDiff(t *testing.T) {
 	log, _ = os.ReadFile(filepath.Join(root, ".pair", "session.log"))
 	if !strings.Contains(string(log), "brand new") {
 		t.Fatalf("untracked diff not rendered:\n%s", log)
+	}
+}
+
+func TestPostEditCapsTheDiffInTheLog(t *testing.T) {
+	root := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		if out, err := execGit(root, args...); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "t@example.com")
+	run("config", "user.name", "t")
+	file := filepath.Join(root, "big.txt")
+	_ = os.WriteFile(file, []byte("start\n"), 0o644)
+	run("add", ".")
+	run("commit", "-q", "-m", "init")
+	_ = os.WriteFile(file, []byte("start\n"+strings.Repeat("new line\n", 200)), 0o644)
+
+	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), LogDiffLines: 10}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: &fakeNvim{}}
+	if err := h.PostEdit(&Input{ToolName: "Edit", ToolInput: ToolInput{FilePath: file}}); err != nil {
+		t.Fatal(err)
+	}
+	log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log"))
+	text := string(log)
+	if !strings.Contains(text, "✎ big.txt (+200 −0)") || !strings.Contains(text, "more lines, see the file in the editor") {
+		t.Fatalf("expected summary and a capped diff:\n%s", text)
+	}
+	if n := strings.Count(text, "\n"); n > 14 {
+		t.Fatalf("log has %d lines, the diff was not capped", n)
+	}
+
+	// LogDiffLines = 0 keeps only the summary.
+	h.Cfg.LogDiffLines = 0
+	_ = os.Remove(filepath.Join(root, ".pair", "session.log"))
+	_ = h.PostEdit(&Input{ToolName: "Edit", ToolInput: ToolInput{FilePath: file}})
+	log, _ = os.ReadFile(filepath.Join(root, ".pair", "session.log"))
+	if strings.Count(string(log), "\n") != 1 {
+		t.Fatalf("summary only expected:\n%s", log)
+	}
+}
+
+func TestNotifyRaisesAttentionForPermissionPrompts(t *testing.T) {
+	root := t.TempDir()
+	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair")}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: &fakeNvim{}}
+	in, err := Parse(strings.NewReader(`{"hook_event_name":"Notification","message":"Claude needs your permission to use Bash","notification_type":"permission_prompt"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Message == "" || in.Notification != "permission_prompt" {
+		t.Fatalf("notification fields not parsed: %+v", in)
+	}
+	// An idle reminder is logged as an event but raises nothing.
+	_ = h.Notify(&Input{Message: "Claude is waiting for your input", Notification: "idle_prompt"})
+	if log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log")); strings.Contains(string(log), "needs you") {
+		t.Fatalf("idle reminder must not alert:\n%s", log)
 	}
 }

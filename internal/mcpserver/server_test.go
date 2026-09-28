@@ -217,7 +217,7 @@ func TestAskSpeaksThenListens(t *testing.T) {
 		t.Fatalf("question not spoken: %q", sp.spoken)
 	}
 	log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log"))
-	if !strings.Contains(string(log), "? Uso Sidekiq") || !strings.Contains(string(log), "👤 Solid Queue.") {
+	if !strings.Contains(string(log), "❓ Uso Sidekiq") || !strings.Contains(string(log), "👤 Solid Queue.") {
 		t.Fatalf("session log:\n%s", log)
 	}
 	ev, _ := os.ReadFile(filepath.Join(root, ".pair", "events.jsonl"))
@@ -245,6 +245,34 @@ func TestAskSpeaksThenListens(t *testing.T) {
 	out, isErr = call(t, sess, "ask", map[string]any{"question": "Continuo?"})
 	if !isErr || !strings.Contains(out, "interrupted") {
 		t.Fatalf("interrupted: %q err=%v", out, isErr)
+	}
+}
+
+func TestAttentionCueBeforeSpeech(t *testing.T) {
+	s, _, _, _ := newTestServer(t)
+	var cues, states []string
+	s.Cue = func(_ context.Context, kind string) { cues = append(cues, kind) }
+	s.CueIdle = 200 * time.Millisecond
+	s.State = func(state, _ string) { states = append(states, state) }
+	sess := connect(t, s)
+
+	call(t, sess, "narrate", map[string]any{"text": "primeira"}) // first speech: cue
+	call(t, sess, "narrate", map[string]any{"text": "segunda"})  // right after: no cue
+	if len(cues) != 1 || cues[0] != KindNarrate {
+		t.Fatalf("cues after two back-to-back narrations = %v", cues)
+	}
+	time.Sleep(250 * time.Millisecond)
+	call(t, sess, "narrate", map[string]any{"text": "terceira"}) // after a quiet stretch: cue
+	if len(cues) != 2 {
+		t.Fatalf("cue expected after the idle gap: %v", cues)
+	}
+	call(t, sess, "ask", map[string]any{"question": "Continuo?"}) // questions always cue
+	if len(cues) != 3 || cues[2] != KindAsk {
+		t.Fatalf("ask must always cue: %v", cues)
+	}
+	want := "speaking working speaking working speaking working asking listening working"
+	if got := strings.Join(states, " "); got != want {
+		t.Fatalf("states\n got %s\nwant %s", got, want)
 	}
 }
 

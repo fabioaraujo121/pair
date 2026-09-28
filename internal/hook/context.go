@@ -106,6 +106,8 @@ type Change struct {
 func (h *Handler) Prompt(in *Input) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	h.state(tmux.StateWorking, "")
+	_ = h.Log.Session("› " + oneLine(in.Prompt, 120))
 	st := loadState(h.Cfg.StateDir)
 	candidates := h.candidates(ctx, st)
 
@@ -365,4 +367,13 @@ func Point(args []string, out io.Writer) error {
 	}
 	fmt.Fprintln(out, text)
 	return nil
+}
+
+// oneLine flattens text to a single line of at most n characters.
+func oneLine(s string, n int) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+	return s
 }

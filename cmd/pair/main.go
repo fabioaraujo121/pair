@@ -29,7 +29,8 @@ const usage = `pair — voice-driven pairing for Claude Code in the terminal
 
 Usage:
   pair [start]       create the tmux session (Claude Code | Neovim / log) or attach to it
-  pair init          write hooks and permissions to .claude/settings.json, create PAIRING.md
+  pair init [--lang en] [--voice Samantha] [--rate 190]
+                     prepare this repository: hooks, CLAUDE.md block, MCP server, PAIRING.md
   pair doctor        check dependencies and configuration
                      --fix downloads the whisper model, --mic runs the microphone test
   pair stop          kill the session and any running say/rec
@@ -58,7 +59,7 @@ func main() {
 	case "start":
 		err = cli.Start()
 	case "init":
-		err = cli.Init()
+		err = cli.Init(args)
 	case "doctor":
 		opts := cli.DoctorOptions{}
 		for _, a := range args {

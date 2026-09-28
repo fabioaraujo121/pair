@@ -21,6 +21,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
 // Input is the JSON Claude Code writes to a hook's stdin (fields observed on
@@ -36,6 +37,8 @@ type Input struct {
 	ToolInput      ToolInput       `json:"tool_input"`
 	ToolResponse   json.RawMessage `json:"tool_response"`
 	Prompt         string          `json:"prompt"`
+	Message        string          `json:"message"`           // Notification
+	Notification   string          `json:"notification_type"` // Notification
 }
 
 // ToolInput covers the Edit and Write tools.
@@ -92,8 +95,10 @@ func Run(name string, stdin io.Reader, stdout io.Writer) error {
 		return h.Stop(in)
 	case "prompt":
 		return h.Prompt(in)
+	case "notify":
+		return h.Notify(in)
 	default:
-		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt)", name)
+		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify)", name)
 	}
 }
 
@@ -123,6 +128,7 @@ func (h *Handler) PreEdit(in *Input) error {
 		return nil
 	}
 
+	h.state(tmux.StateWorking, "editing "+h.rel(file))
 	ctx := context.Background()
 	shown, nvErr := h.Nvim.Show(ctx, file, start, end)
 	payload := map[string]any{"tool": in.ToolName, "file": file, "start": start, "end": end, "found": found}
@@ -142,7 +148,12 @@ func (h *Handler) PostEdit(in *Input) error {
 	ctx := context.Background()
 	nvErr := h.Nvim.Reload(ctx)
 	if file != "" {
-		if diff := h.renderDiff(ctx, file); diff != "" {
+		h.state(tmux.StateWorking, "edited "+h.rel(file))
+		summary, diff := h.renderDiff(ctx, file)
+		if summary != "" {
+			_ = h.Log.Session(summary)
+		}
+		if diff != "" {
 			_ = h.Log.SessionRaw([]byte(diff))
 		}
 	}
@@ -161,12 +172,37 @@ func (h *Handler) PostEdit(in *Input) error {
 	return nvErr
 }
 
-// Stop logs the end of a turn and plays a chime without blocking.
+// Stop logs the end of a turn, hands the turn to the engineer in the status
+// bar, and plays a chime without blocking.
 func (h *Handler) Stop(in *Input) error {
 	_ = h.Log.Append("stop", map[string]any{"session_id": in.SessionID})
-	_ = h.Log.Session("■ turn ended")
-	chime()
+	_ = h.Log.Session("■ turn ended, your turn")
+	h.state(tmux.StateIdle, "")
+	chime("Glass")
 	return nil
+}
+
+// Notify handles Claude Code's notifications. A permission prompt is easy
+// to miss when nobody watches Claude's pane, so it raises the status bar
+// alert and a sound; an idle reminder just marks the turn as the
+// engineer's.
+func (h *Handler) Notify(in *Input) error {
+	msg := strings.TrimSpace(in.Message)
+	idle := in.Notification == "idle_prompt" || strings.Contains(strings.ToLower(msg), "waiting for your input")
+	_ = h.Log.Append("notify", map[string]any{"message": msg, "kind": in.Notification})
+	if idle {
+		h.state(tmux.StateIdle, "")
+		return nil
+	}
+	_ = h.Log.Session("⚠ Claude needs you: " + msg + " (F7 shows Claude's pane)")
+	h.state(tmux.StateAttention, msg)
+	chime("Funk")
+	return nil
+}
+
+// state updates the status bar indicator of the running session.
+func (h *Handler) state(kind, detail string) {
+	tmux.SetState(h.Cfg.Session, kind, detail)
 }
 
 // LocateRange returns the 1-based first and last line of the first
@@ -202,9 +238,11 @@ func (h *Handler) rel(p string) string {
 	return p
 }
 
-// renderDiff returns the working-tree diff of file, through delta when it
-// is installed. Untracked files are diffed against /dev/null.
-func (h *Handler) renderDiff(ctx context.Context, file string) string {
+// renderDiff returns a one-line summary ("✎ path (+3 −1)") and the
+// working-tree diff of file, through delta when it is installed and capped
+// at LogDiffLines lines so narrations stay visible in the activity log.
+// Untracked files are diffed against /dev/null.
+func (h *Handler) renderDiff(ctx context.Context, file string) (summary, diff string) {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	git := func(args ...string) []byte {
@@ -219,10 +257,25 @@ func (h *Handler) renderDiff(ctx context.Context, file string) string {
 		}
 	}
 	if len(bytes.TrimSpace(out)) == 0 {
-		return ""
+		return "✎ " + h.rel(file) + " (no change against git)", ""
+	}
+	added, removed := 0, 0
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	summary = fmt.Sprintf("✎ %s (+%d −%d)", h.rel(file), added, removed)
+	limit := h.Cfg.LogDiffLines
+	if limit <= 0 {
+		return summary, ""
 	}
 	if delta, err := exec.LookPath("delta"); err == nil {
-		args := []string{"--paging=never"}
+		args := []string{"--paging=never", "--file-style=omit", "--hunk-header-style=omit", "--keep-plus-minus-markers"}
 		if w := h.paneWidth(ctx); w != "" {
 			args = append(args, "--width", w)
 		}
@@ -232,12 +285,17 @@ func (h *Handler) renderDiff(ctx context.Context, file string) string {
 			out = rendered
 		}
 	}
-	return string(out)
+	lines := strings.Split(strings.Trim(string(out), "\n"), "\n")
+	if len(lines) > limit {
+		more := len(lines) - limit
+		lines = append(lines[:limit], fmt.Sprintf("   … %d more lines, see the file in the editor", more))
+	}
+	return summary, strings.Join(lines, "\n") + "\n"
 }
 
 // paneWidth asks tmux how wide the log pane is so delta wraps correctly.
 func (h *Handler) paneWidth(ctx context.Context) string {
-	out, err := exec.CommandContext(ctx, "tmux", "display", "-p", "-t", h.Cfg.Session+":0.2", "#{pane_width}").Output()
+	out, err := exec.CommandContext(ctx, "tmux", tmux.Args("display", "-p", "-t", tmux.Pane(h.Cfg.Session, tmux.RoleLog), "#{pane_width}")...).Output()
 	if err != nil {
 		return ""
 	}
@@ -246,8 +304,8 @@ func (h *Handler) paneWidth(ctx context.Context) string {
 
 // chime plays a short system sound in its own session so the hook can exit
 // immediately.
-func chime() {
-	cmd := exec.Command("afplay", "/System/Library/Sounds/Glass.aiff")
+func chime(name string) {
+	cmd := exec.Command("afplay", "/System/Library/Sounds/"+name+".aiff")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	_ = cmd.Start()
 }

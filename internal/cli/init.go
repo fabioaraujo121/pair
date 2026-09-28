@@ -15,8 +15,40 @@ import (
 // .claude/settings.json, the pairing-mode block in CLAUDE.md, the MCP server
 // registration, a PAIRING.md scratchpad, .gitignore entries, and the Neovim
 // plugin under ~/.pair/nvim. Re-running it is safe.
-func Init() error {
+func Init(args []string) error {
+	settings := map[string]string{}
+	for i := 0; i < len(args); i++ {
+		value := func() string {
+			if i+1 < len(args) {
+				i++
+				return args[i]
+			}
+			return ""
+		}
+		switch args[i] {
+		case "--lang":
+			settings["PAIR_LANG"] = value()
+		case "--voice":
+			settings["PAIR_VOICE"] = value()
+		case "--rate":
+			settings["PAIR_RATE"] = value()
+		default:
+			return fmt.Errorf("unknown option %q (usage: pair init [--lang en] [--voice Samantha] [--rate 190])", args[i])
+		}
+	}
+	for k, v := range settings {
+		if v == "" {
+			return fmt.Errorf("%s needs a value", k)
+		}
+	}
+	if len(settings) > 0 {
+		if err := config.SaveUser(settings); err != nil {
+			return err
+		}
+		fmt.Printf("✓ %s updated\n", config.UserConfigPath())
+	}
 	cfg := config.Load("")
+	fmt.Printf("• speaking %s with voice %s at %d wpm (change with `pair init --lang pt --voice Luciana`)\n", cfg.Lang, cfg.Voice, cfg.Rate)
 	exe, err := os.Executable()
 	if err != nil {
 		return err
@@ -37,7 +69,7 @@ func Init() error {
 	if err := os.WriteFile(settingsPath, merged, 0o644); err != nil {
 		return err
 	}
-	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop) and MCP permissions")
+	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop, Notification) and MCP permissions")
 
 	claudeMD := filepath.Join(cfg.Root, "CLAUDE.md")
 	current, _ := os.ReadFile(claudeMD)
@@ -102,7 +134,7 @@ with Hammerspoon: add to ~/.hammerspoon/init.lua
 
   dofile(os.getenv("HOME") .. "/.pair/hammerspoon.lua")
 
-Next: run `+"`pair doctor --mic`"+` once to grant microphone access, then `+"`pair`"+` to start a session.
+Next: run `+"`pair`"+` to start a session. In the session: F5 to talk, F6 to interrupt.
 `, pluginDir)
 	return nil
 }
@@ -125,10 +157,24 @@ func registerMCP(exe, root string) error {
 	return nil
 }
 
-// claudeCmd builds a `claude` subcommand that works even when pair itself
-// runs inside a Claude Code session.
+// claudeCmd builds a `claude` subcommand. It goes through the user's
+// interactive shell so a wrapper function or alias around `claude` (for
+// example one that selects a per-folder account) applies, exactly as if
+// the user had typed the command. It also works when pair itself runs
+// inside a Claude Code session.
 func claudeCmd(claude string, args ...string) *exec.Cmd {
-	cmd := exec.Command(claude, args...)
+	var cmd *exec.Cmd
+	shell := os.Getenv("SHELL")
+	if base := filepath.Base(shell); base == "zsh" || base == "bash" {
+		quoted := make([]string, 0, len(args)+1)
+		quoted = append(quoted, "claude")
+		for _, a := range args {
+			quoted = append(quoted, shellQuote(a))
+		}
+		cmd = exec.Command(shell, "-ic", strings.Join(quoted, " "))
+	} else {
+		cmd = exec.Command(claude, args...)
+	}
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "CLAUDECODE=") {
 			cmd.Env = append(cmd.Env, kv)

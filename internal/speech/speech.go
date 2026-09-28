@@ -91,18 +91,35 @@ type Silent struct{}
 func (Silent) Speak(context.Context, string) error { return nil }
 
 // DefaultVocabulary expands abbreviations that TTS engines otherwise spell
-// letter by letter or mangle. Keys match whole words, case-sensitively.
+// letter by letter or mangle, whatever the spoken language (the expansions
+// are the English technical terms). Keys match whole words,
+// case-sensitively.
 var DefaultVocabulary = map[string]string{
-	"PR":   "pull request",
-	"PRs":  "pull requests",
-	"DB":   "database",
-	"DBs":  "databases",
-	"env":  "environment",
-	"repo": "repositório",
-	"i.e.": "ou seja",
-	"e.g.": "por exemplo",
-	"vs":   "versus",
-	"vs.":  "versus",
+	"PR":  "pull request",
+	"PRs": "pull requests",
+	"DB":  "database",
+	"DBs": "databases",
+	"env": "environment",
+	"vs":  "versus",
+	"vs.": "versus",
+}
+
+// languageVocabulary holds the expansions that depend on the spoken
+// language.
+var languageVocabulary = map[string]map[string]string{
+	"en": {"i.e.": "that is", "e.g.": "for example"},
+	"pt": {"i.e.": "ou seja", "e.g.": "por exemplo", "repo": "repositório"},
+	"es": {"i.e.": "es decir", "e.g.": "por ejemplo", "repo": "repositorio"},
+}
+
+// VocabularyFor returns the language-specific expansions for a whisper
+// language code, to pass to Normalize.
+func VocabularyFor(lang string) map[string]string {
+	out := map[string]string{}
+	for k, v := range languageVocabulary[strings.ToLower(lang)] {
+		out[k] = v
+	}
+	return out
 }
 
 var (

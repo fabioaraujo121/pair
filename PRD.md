@@ -113,7 +113,9 @@ flowchart LR
   HK --> DP
 ```
 
-**tmux layout** (session name `pair`, window 0):
+**Rev 3 (Sep 28, 2026), after the first real session.** The layout below was replaced: watching Claude Code's own output is not the point of pairing; what matters is whether it is running, which files it changes and why. Neovim (project tree, editor, `PAIRING.md`) is now the main area, the activity log is the right column, and Claude Code is a strip under the editor (`F7` zooms it). The status bar shows the state (working, speaking, asking, listening, your turn, needs you). Speech is announced by an attention sound, because a sentence that starts unannounced after a long quiet stretch is half missed. `F5`/`F6` talk and interrupt from any pane. The session runs on pair's own tmux server (`tmux -L pair`) and panes are addressed by id, not index. Settings persist in `~/.pair/config`.
+
+**Original tmux layout** (session name `pair`, window 0):
 
 | Pane | Content | Size |
 | --- | --- | --- |
@@ -230,9 +232,10 @@ Configuration is env vars with sane defaults, plus a `CLAUDE.md` block that `pai
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `PAIR_VOICE` | `Luciana` | `say` voice |
+| `PAIR_VOICE` | `Samantha` | `say` voice (rev 3: English by default; `pair init --lang pt --voice Luciana` for Portuguese) |
 | `PAIR_RATE` | `190` | words per minute |
-| `PAIR_LANG` | `pt` | whisper language |
+| `PAIR_LANG` | `en` | whisper language and the language line of the `CLAUDE.md` block |
+| `PAIR_CUE` | `on` | attention sound before speech (rev 3) |
 | `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo.bin` | model path |
 | `PAIR_SOCK` | `$TMPDIR/pair-<repo hash>.sock` | Neovim listen address; must be ≤ 104 bytes on macOS (or `127.0.0.1:<port>`) |
 | `PAIR_SESSION` | `pair` | tmux session name |

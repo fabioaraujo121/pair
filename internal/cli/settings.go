@@ -21,6 +21,7 @@ var hookSpecs = []hookSpec{
 	{"PostToolUse", "Edit|Write", "post_edit", 15},
 	{"UserPromptSubmit", "", "prompt", 20}, // default for this event is 30 s; output is discarded on timeout
 	{"Stop", "", "stop", 10},
+	{"Notification", "", "notify", 10}, // permission prompts must reach someone not watching Claude's pane
 }
 
 // mcpTools are pre-approved so narrate/ask/show never prompt (milestone 2).
