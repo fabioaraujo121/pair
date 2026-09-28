@@ -23,6 +23,11 @@ import (
 // pauses, transcribe, and type the transcript into the Claude Code pane.
 func Listen(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
+	lock, busy := micLock(cfg, out)
+	if busy {
+		return nil
+	}
+	defer lock.Release()
 	return listenAndInject(cfg, out)
 }
 
@@ -30,6 +35,13 @@ func Listen(args []string, out io.Writer) error {
 // kill `say`, send Escape, wait for the prompt, then Listen.
 func Interrupt(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
+	// The lock comes first: a key that auto-repeats must not send Escape
+	// several times (two in a row open Claude Code's rewind menu).
+	lock, busy := micLock(cfg, out)
+	if busy {
+		return nil
+	}
+	defer lock.Release()
 	speech.KillSpeech()
 	log := events.Open(cfg.StateDir)
 	if tmux.HasSession(cfg.Session) {
@@ -43,10 +55,25 @@ func Interrupt(args []string, out io.Writer) error {
 	return listenAndInject(cfg, out)
 }
 
+// micLock takes the cross-process microphone lock without waiting. A press
+// that arrives while a recording is running (key auto-repeat, an impatient
+// second tap) is ignored.
+func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
+	if cfg.Mute {
+		return nil, false
+	}
+	lock, err := speech.AcquireMic(context.Background(), speech.MicLockPath(cfg), false)
+	if err != nil {
+		fmt.Fprintln(out, "(already listening)")
+		return nil, true
+	}
+	return lock, false
+}
+
 func listenAndInject(cfg config.Config, out io.Writer) error {
 	speech.KillSpeech()
 	log := events.Open(cfg.StateDir)
-	listener, err := speech.NewListener(cfg)
+	listener, err := speech.NewListener(cfg, false) // the caller holds the lock
 	if err != nil {
 		return err
 	}
@@ -69,13 +96,17 @@ func listenAndInject(cfg config.Config, out io.Writer) error {
 		}
 		return err
 	}
+	if heard.Text != "" && repeated(cfg, heard.Text) {
+		heard.Dropped, heard.Text = "same sentence as a moment ago, not sent twice", ""
+		payload["heard"] = heard
+	}
 	_ = log.Append("listen", payload)
 	if heard.Text == "" {
-		_ = log.Session("🎙 (nothing heard: " + heard.Dropped + ")")
+		_ = log.Session("🎙 (nothing sent: " + heard.Dropped + ")")
 		if inSession {
-			tmux.Message(cfg.Session, "🎙 nothing heard: "+heard.Dropped)
+			tmux.Message(cfg.Session, "🎙 nothing sent: "+heard.Dropped)
 		}
-		fmt.Fprintf(out, "(nothing heard: %s)\n", heard.Dropped)
+		fmt.Fprintf(out, "(nothing sent: %s)\n", heard.Dropped)
 		return nil
 	}
 	_ = log.Session("🎙 " + heard.Text)
@@ -87,6 +118,27 @@ func listenAndInject(cfg config.Config, out io.Writer) error {
 	}
 	fmt.Fprintln(out, heard.Text)
 	return nil
+}
+
+// repeatWindow is how long an identical transcript counts as a repeat.
+const repeatWindow = 5 * time.Second
+
+// repeated reports whether text equals the previous transcript heard
+// within repeatWindow, and records text as the latest one.
+func repeated(cfg config.Config, text string) bool {
+	path := filepath.Join(cfg.UserDir, "last_heard")
+	now := time.Now()
+	same := false
+	if data, err := os.ReadFile(path); err == nil {
+		if ts, prev, ok := strings.Cut(string(data), "\n"); ok {
+			if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+				same = prev == text && now.Sub(t) < repeatWindow
+			}
+		}
+	}
+	_ = os.MkdirAll(cfg.UserDir, 0o755)
+	_ = os.WriteFile(path, []byte(now.Format(time.RFC3339Nano)+"\n"+text), 0o644)
+	return same
 }
 
 // voiceConfig resolves the repository for a voice command.

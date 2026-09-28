@@ -271,8 +271,8 @@ func (h *Handler) renderDiff(ctx context.Context, file string) (summary, diff st
 	}
 	summary = fmt.Sprintf("✎ %s (+%d −%d)", h.rel(file), added, removed)
 	limit := h.Cfg.LogDiffLines
-	if limit <= 0 {
-		return summary, ""
+	if limit <= 0 || filepath.Base(file) == "PAIRING.md" {
+		return summary, "" // the scratchpad is already on screen
 	}
 	if delta, err := exec.LookPath("delta"); err == nil {
 		args := []string{"--paging=never", "--file-style=omit", "--hunk-header-style=omit", "--keep-plus-minus-markers"}

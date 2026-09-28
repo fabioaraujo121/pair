@@ -67,7 +67,7 @@ func New(cfg config.Config, version string) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	listener, err := speech.NewListener(cfg)
+	listener, err := speech.NewListener(cfg, true)
 	if err != nil {
 		return nil, err
 	}

@@ -194,3 +194,16 @@ func TestPointBuildsTheReference(t *testing.T) {
 		t.Fatal("missing --start must be an error")
 	}
 }
+
+func TestRepeatedTranscriptIsNotSentTwice(t *testing.T) {
+	cfg := config.Config{UserDir: t.TempDir()}
+	if repeated(cfg, "Where did we stop?") {
+		t.Fatal("first time is not a repeat")
+	}
+	if !repeated(cfg, "Where did we stop?") {
+		t.Fatal("the same sentence right away is a repeat")
+	}
+	if repeated(cfg, "And the call to action?") {
+		t.Fatal("a different sentence is not a repeat")
+	}
+}

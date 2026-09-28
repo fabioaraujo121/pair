@@ -209,6 +209,17 @@ type VoiceListener struct {
 	STT     *Whisper
 	WavPath string
 	Chime   func(ctx context.Context)
+
+	// LockPath, when set, makes Listen take the cross-process microphone
+	// lock. LockWait chooses between waiting for it (a question Claude
+	// asked) and giving up at once.
+	LockPath string
+	LockWait bool
+}
+
+// MicLockPath is the lock shared by every pair process of this user.
+func MicLockPath(cfg config.Config) string {
+	return filepath.Join(cfg.UserDir, "mic.lock")
 }
 
 // NewVoiceListener wires rec + whisper-cli from the configuration.
@@ -233,6 +244,16 @@ func NewVoiceListener(cfg config.Config) *VoiceListener {
 // Listen runs one round. An empty Text with a Dropped reason is a normal
 // outcome ("(no answer)"); errors are failures or interruption.
 func (l *VoiceListener) Listen(ctx context.Context) (Heard, error) {
+	if l.LockPath != "" {
+		lock, err := AcquireMic(ctx, l.LockPath, l.LockWait)
+		if errors.Is(err, ErrMicBusy) {
+			return Heard{Dropped: "another recording is in progress"}, nil
+		}
+		if err != nil {
+			return Heard{}, err
+		}
+		defer lock.Release()
+	}
 	if l.Chime != nil {
 		l.Chime(ctx)
 	}
@@ -260,8 +281,12 @@ func (l *VoiceListener) Listen(ctx context.Context) (Heard, error) {
 		return h, err
 	}
 	h.Raw = text
+	if strings.TrimSpace(text) == "" {
+		h.Dropped = "nothing intelligible in the recording"
+		return h, nil
+	}
 	if IsHallucination(text) {
-		h.Dropped = "transcript looks like a whisper hallucination: " + text
+		h.Dropped = "whisper returned a stock phrase for silence (\"" + text + "\")"
 		return h, nil
 	}
 	h.Text = text

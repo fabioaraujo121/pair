@@ -293,7 +293,7 @@ func TestVoiceListenerDecidesFromAudio(t *testing.T) {
 	t.Setenv("FAKE_REC_WAV", speechWav)
 	t.Setenv("FAKE_TRANSCRIPT", "Obrigado.")
 	h, _ = l.Listen(ctx)
-	if h.Text != "" || !strings.Contains(h.Dropped, "hallucination") || h.Raw != "Obrigado." {
+	if h.Text != "" || !strings.Contains(h.Dropped, "stock phrase") || h.Raw != "Obrigado." {
 		t.Fatalf("hallucination: %+v", h)
 	}
 }
@@ -346,5 +346,90 @@ func TestRealWhisperOnSynthesizedSpeech(t *testing.T) {
 	}
 	if IsHallucination(text) {
 		t.Fatalf("real speech flagged as hallucination: %q", text)
+	}
+}
+
+func TestMicLockIsExclusiveAcrossHolders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mic.lock")
+	ctx := context.Background()
+	first, err := AcquireMic(ctx, path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AcquireMic(ctx, path, false); err != ErrMicBusy {
+		t.Fatalf("second holder must be refused, got %v", err)
+	}
+	// A waiter gets the lock once it is released.
+	got := make(chan error, 1)
+	go func() {
+		l, err := AcquireMic(ctx, path, true)
+		if err == nil {
+			l.Release()
+		}
+		got <- err
+	}()
+	time.Sleep(150 * time.Millisecond)
+	first.Release()
+	select {
+	case err := <-got:
+		if err != nil {
+			t.Fatalf("waiter: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiter never got the lock")
+	}
+	// A waiter gives up when its context ends.
+	held, _ := AcquireMic(ctx, path, false)
+	defer held.Release()
+	short, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if _, err := AcquireMic(short, path, true); err != ErrInterrupted {
+		t.Fatalf("want ErrInterrupted, got %v", err)
+	}
+}
+
+// Ten listeners started at once, as a key that auto-repeats does: exactly
+// one records, the others are refused.
+func TestConcurrentListenersRecordOnce(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FAKE_DIR", dir)
+	wav := filepath.Join(dir, "speech.wav")
+	_ = WriteWAV(wav, 16000, sine(16000, 1, 0.2))
+	t.Setenv("FAKE_REC_WAV", wav)
+	t.Setenv("FAKE_REC_SLEEP", "0.4")
+	recBin, sttBin := fakeRec(t, dir), fakeWhisper(t, dir, "Where did we stop?")
+
+	type result struct {
+		h   Heard
+		err error
+	}
+	results := make(chan result, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			l := &VoiceListener{
+				Rec:      &Recorder{Bin: recBin, Max: 5 * time.Second},
+				STT:      &Whisper{Bin: sttBin, Model: "m"},
+				WavPath:  filepath.Join(dir, "last_input.wav"),
+				LockPath: filepath.Join(dir, "mic.lock"),
+			}
+			h, err := l.Listen(context.Background())
+			results <- result{h, err}
+		}()
+	}
+	heard, refused := 0, 0
+	for i := 0; i < 10; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		switch {
+		case r.h.Text == "Where did we stop?":
+			heard++
+		case strings.Contains(r.h.Dropped, "another recording"):
+			refused++
+		}
+	}
+	if heard != 1 || refused != 9 {
+		t.Fatalf("heard=%d refused=%d, want 1 and 9", heard, refused)
 	}
 }

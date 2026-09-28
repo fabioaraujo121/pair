@@ -23,14 +23,20 @@ func NewSpeaker(cfg config.Config) (Speaker, error) {
 	}
 }
 
-// NewListener picks the speech-to-text adapter named by PAIR_STT.
-func NewListener(cfg config.Config) (Listener, error) {
+// NewListener picks the speech-to-text adapter named by PAIR_STT. With
+// lock, the listener takes the cross-process microphone lock itself and
+// waits for it; callers that already hold the lock pass false.
+func NewListener(cfg config.Config, lock bool) (Listener, error) {
 	if cfg.Mute {
 		return Deaf{}, nil
 	}
 	switch cfg.STT {
 	case "", "whisper":
-		return NewVoiceListener(cfg), nil
+		l := NewVoiceListener(cfg)
+		if lock {
+			l.LockPath, l.LockWait = MicLockPath(cfg), true
+		}
+		return l, nil
 	case "none":
 		return Deaf{}, nil
 	default:
