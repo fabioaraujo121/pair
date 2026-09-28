@@ -89,7 +89,10 @@ func (r *Recorder) Record(ctx context.Context, path string) (Recording, error) {
 
 	rctx, cancel := context.WithTimeout(ctx, max)
 	defer cancel()
-	args := []string{"-q", "-r", strconv.Itoa(rate), "-c", "1", path, "silence", "1", "0.1", level, "1", secs, level}
+	// -b 16 -e signed-integer: CoreAudio delivers 32-bit samples and sox
+	// would write a 32-bit file, which whisper-cli cannot read.
+	args := []string{"-q", "-r", strconv.Itoa(rate), "-c", "1", "-b", "16", "-e", "signed-integer", path,
+		"silence", "1", "0.1", level, "1", secs, level}
 	cmd := exec.CommandContext(rctx, bin, args...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -241,6 +244,9 @@ func (l *VoiceListener) Listen(ctx context.Context) (Heard, error) {
 	switch {
 	case !rec.Exists:
 		h.Dropped = "no audio file (microphone unavailable or permission denied)"
+		return h, nil
+	case rec.Audio.Bits != 16:
+		h.Dropped = fmt.Sprintf("recording is %d-bit, whisper needs 16-bit", rec.Audio.Bits)
 		return h, nil
 	case rec.Audio.Seconds < MinSeconds:
 		h.Dropped = fmt.Sprintf("recording too short (%.2fs)", rec.Audio.Seconds)

@@ -2,6 +2,7 @@ package speech
 
 import (
 	"context"
+	"encoding/binary"
 	"math"
 	"os"
 	"os/exec"
@@ -51,6 +52,93 @@ func TestAnalyzeWAV(t *testing.T) {
 	}
 }
 
+// wavBytes builds a mono WAV with an arbitrary encoding. extensible wraps
+// the format in WAVE_FORMAT_EXTENSIBLE, the way sox writes 32-bit files.
+func wavBytes(rate, bits, format int, extensible bool, payload []byte) []byte {
+	fmtSize := 16
+	tag := format
+	if extensible {
+		fmtSize, tag = 40, wavExtensible
+	}
+	buf := make([]byte, 0, 28+fmtSize+len(payload))
+	le16 := func(v int) []byte { b := make([]byte, 2); binary.LittleEndian.PutUint16(b, uint16(v)); return b }
+	le32 := func(v int) []byte { b := make([]byte, 4); binary.LittleEndian.PutUint32(b, uint32(v)); return b }
+	buf = append(buf, "RIFF"...)
+	buf = append(buf, le32(20+fmtSize+len(payload))...)
+	buf = append(buf, "WAVEfmt "...)
+	buf = append(buf, le32(fmtSize)...)
+	buf = append(buf, le16(tag)...)
+	buf = append(buf, le16(1)...)
+	buf = append(buf, le32(rate)...)
+	buf = append(buf, le32(rate*bits/8)...)
+	buf = append(buf, le16(bits/8)...)
+	buf = append(buf, le16(bits)...)
+	if extensible {
+		buf = append(buf, le16(22)...)   // cbSize
+		buf = append(buf, le16(bits)...) // valid bits
+		buf = append(buf, le32(4)...)    // channel mask
+		buf = append(buf, le16(format)...)
+		buf = append(buf, make([]byte, 14)...) // rest of the SubFormat GUID
+	}
+	buf = append(buf, "data"...)
+	buf = append(buf, le32(len(payload))...)
+	return append(buf, payload...)
+}
+
+// TestAnalyzeWAVOtherEncodings covers the file sox really writes from the
+// macOS microphone when no sample size is requested: 32-bit extensible.
+func TestAnalyzeWAVOtherEncodings(t *testing.T) {
+	dir := t.TempDir()
+	const rate, n = 48000, 48000
+	amp := 0.25
+	want := amp / math.Sqrt2
+
+	int32s := make([]byte, 4*n)
+	int24s := make([]byte, 3*n)
+	floats := make([]byte, 4*n)
+	for i := 0; i < n; i++ {
+		v := amp * math.Sin(2*math.Pi*440*float64(i)/rate)
+		binary.LittleEndian.PutUint32(int32s[4*i:], uint32(int32(v*2147483647)))
+		s24 := int32(v * 8388607)
+		int24s[3*i], int24s[3*i+1], int24s[3*i+2] = byte(s24), byte(s24>>8), byte(s24>>16)
+		binary.LittleEndian.PutUint32(floats[4*i:], math.Float32bits(float32(v)))
+	}
+	cases := []struct {
+		name       string
+		bits, tag  int
+		extensible bool
+		payload    []byte
+	}{
+		{"int32 extensible (sox from CoreAudio)", 32, wavPCM, true, int32s},
+		{"int32 plain", 32, wavPCM, false, int32s},
+		{"int24", 24, wavPCM, false, int24s},
+		{"float32", 32, wavFloat, false, floats},
+	}
+	for _, c := range cases {
+		path := filepath.Join(dir, "x.wav")
+		if err := os.WriteFile(path, wavBytes(rate, c.bits, c.tag, c.extensible, c.payload), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		a, err := AnalyzeWAV(path)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if a.Bits != c.bits || a.Rate != rate || math.Abs(a.Seconds-1) > 0.01 || math.Abs(a.RMS-want) > 0.005 {
+			t.Fatalf("%s: %+v, want 1 s at rms %.3f", c.name, a, want)
+		}
+	}
+	// A 32-bit recording is analyzable but must not reach whisper.
+	path := filepath.Join(dir, "rec32.wav")
+	_ = os.WriteFile(path, wavBytes(16000, 32, wavPCM, true, int32s[:4*16000]), 0o644)
+	t.Setenv("FAKE_DIR", dir)
+	t.Setenv("FAKE_REC_WAV", path)
+	l := &VoiceListener{Rec: &Recorder{Bin: fakeRec(t, dir), Max: 5 * time.Second}, STT: &Whisper{Bin: "/nonexistent"}, WavPath: filepath.Join(dir, "in.wav")}
+	h, err := l.Listen(context.Background())
+	if err != nil || h.Text != "" || !strings.Contains(h.Dropped, "32-bit") {
+		t.Fatalf("32-bit recording: %+v %v", h, err)
+	}
+}
+
 func TestIsHallucination(t *testing.T) {
 	yes := []string{"", ".", "Obrigado.", "obrigada", "Transcrição e Legendas por Quintena Coelho", "Legendas pela comunidade Amara.org", "E aí", "Tchau!", "Thank you.", " ok "}
 	no := []string{"Pode seguir com a opção A.", "Usa Sidekiq.", "não, prefiro o Solid Queue", "obrigado, mas prefiro a segunda opção"}
@@ -80,7 +168,7 @@ func fakeRec(t *testing.T, dir string) string {
 	bin := filepath.Join(dir, "rec")
 	script := `#!/bin/sh
 printf '%s\n' "$*" > "$FAKE_DIR/rec.args"
-out="$6"
+out="${10}"
 if [ -n "$FAKE_REC_SLEEP" ]; then sleep "$FAKE_REC_SLEEP"; fi
 if [ -n "$FAKE_REC_WAV" ]; then cp "$FAKE_REC_WAV" "$out"; fi
 `
@@ -117,7 +205,7 @@ func TestRecorderArgsAndCap(t *testing.T) {
 		t.Fatalf("recording: %+v", rec)
 	}
 	args, _ := os.ReadFile(filepath.Join(dir, "rec.args"))
-	want := "-q -r 16000 -c 1 " + out + " silence 1 0.1 1% 1 1.5 1%"
+	want := "-q -r 16000 -c 1 -b 16 -e signed-integer " + out + " silence 1 0.1 1% 1 1.5 1%"
 	if strings.TrimSpace(string(args)) != want {
 		t.Fatalf("rec args\n got %q\nwant %q", strings.TrimSpace(string(args)), want)
 	}

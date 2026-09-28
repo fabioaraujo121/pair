@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -173,14 +174,46 @@ func micCheck(w io.Writer, cfg config.Config) check {
 	_ = os.Remove(tmp)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "rec", "-q", "-r", "16000", "-c", "1", tmp, "trim", "0", "1")
+	// Same format options as the real recorder: 16 kHz mono 16-bit.
+	cmd := exec.CommandContext(ctx, "rec", "-r", "16000", "-c", "1", "-b", "16", "-e", "signed-integer", tmp, "trim", "0", "1")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 2 * time.Second
-	_ = cmd.Run()
+	start := time.Now()
+	runErr := cmd.Run()
+	elapsed := time.Since(start).Round(100 * time.Millisecond)
+	timedOut := ctx.Err() != nil
 	audio, err := speech.AnalyzeWAV(tmp)
 	_ = os.Remove(tmp)
 	if err != nil || audio.Seconds < 0.5 {
-		return check{"microphone", true, false, "no audio captured. Grant microphone access to your terminal app under System Settings → Privacy & Security → Microphone (or reset with `tccutil reset Microphone`), then run `pair doctor --mic` again"}
+		// Say what actually happened instead of assuming a permission problem.
+		var why []string
+		switch {
+		case timedOut:
+			why = append(why, fmt.Sprintf("rec did not finish a 1 s recording within %s (no audio arrived from the input device)", elapsed))
+		case runErr != nil:
+			why = append(why, fmt.Sprintf("rec failed after %s: %v", elapsed, runErr))
+		}
+		if err != nil {
+			why = append(why, "no usable WAV ("+err.Error()+")")
+		} else {
+			why = append(why, fmt.Sprintf("only %.2f s recorded", audio.Seconds))
+		}
+		if msg := tailLines(stderr.String(), 4); msg != "" {
+			why = append(why, "sox said: "+msg)
+		}
+		return check{"microphone", true, false, "no audio captured: " + strings.Join(why, "; ") +
+			".\n                 If your terminal app is off under System Settings → Privacy & Security → Microphone, enable it and restart the terminal." +
+			"\n                 If it is on, check System Settings → Sound → Input, and reproduce with: rec -V3 -r 16000 -c 1 /tmp/t.wav trim 0 1"}
+	}
+	if audio.Bits != 16 {
+		return check{"microphone", true, false, fmt.Sprintf("rec wrote a %d-bit file although 16-bit was requested; whisper-cli needs 16-bit (sox said: %s)", audio.Bits, tailLines(stderr.String(), 2))}
+	}
+	if audio.RMS < 1e-5 {
+		// macOS hands out digital silence instead of an error when the app
+		// owning the terminal has no microphone access.
+		return check{"microphone", true, false, "the input delivered pure digital silence. macOS does this when the terminal app lacks microphone access (System Settings → Privacy & Security → Microphone, then restart the terminal), when the input volume is zero, or when the wrong device is selected under System Settings → Sound → Input"}
 	}
 	level := audio.RMS * 100
 	detail := fmt.Sprintf("ok, ambient level %.2f%% of full scale", level)
@@ -188,6 +221,20 @@ func micCheck(w io.Writer, cfg config.Config) check {
 		return check{"microphone", false, false, detail + fmt.Sprintf(": above the %s silence threshold, recordings would never stop. Lower the noise or set PAIR_SILENCE_LEVEL=%.0f%%", cfg.SilenceLevel, level*2)}
 	}
 	return check{"microphone", true, true, detail}
+}
+
+// tailLines returns the last n non-empty lines of s joined with " | ".
+func tailLines(s string, n int) string {
+	var lines []string
+	for _, l := range strings.Split(s, "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > n {
+		lines = lines[len(lines)-n:]
+	}
+	return strings.Join(lines, " | ")
 }
 
 func nvimVersion() (string, error) {
