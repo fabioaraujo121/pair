@@ -226,6 +226,8 @@ type Listener interface {
 
 Adapters planned after v1: OpenAI TTS/STT, ElevenLabs, Apple SpeechAnalyzer (macOS 26+). Selection by `PAIR_TTS` / `PAIR_STT` env vars.
 
+**Kokoro adapter (added Sep 28, 2026).** The system voices sounded too robotic in use, and this Mac had no Enhanced or Premium voice installed. `PAIR_TTS=kokoro` speaks with Kokoro, a neural model that runs locally: free and offline, in keeping with the default stack. Measured on an M5 Pro: model load 0.5 s, synthesis 3.4 to 7 times faster than real time, about one second for a narration sentence. A Python worker (`kokoro-onnx` in a `uv` environment under `~/.pair/kokoro`) keeps the model loaded and writes one WAV per sentence; the Go side plays them with `afplay`, which keeps interruption a matter of signalling a process. Synthesis starts while the attention sound plays. Any failure falls back to `say`. `pair voice setup kokoro` installs it.
+
 ## Configuration and pairing-mode prompt
 
 Configuration is env vars with sane defaults, plus a `CLAUDE.md` block that `pair init` manages.
@@ -238,7 +240,7 @@ Configuration is env vars with sane defaults, plus a `CLAUDE.md` block that `pai
 | `PAIR_CUE` | `on` | attention sound before speech (rev 3) |
 | `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo.bin` | model path |
 | `PAIR_SOCK` | `$TMPDIR/pair-<repo hash>.sock` | Neovim listen address; must be ≤ 104 bytes on macOS (or `127.0.0.1:<port>`) |
-| `PAIR_SESSION` | `pair` | tmux session name |
+| `PAIR_SESSION` | `pair-<directory>-<hash>` | tmux session name, one per repository (a single shared name let a command in one repository stop the session of another) |
 | `PAIR_HIGHLIGHT_TTL` | `20` | seconds before a `show` highlight clears |
 | `PAIR_DIFF_LIMIT` | `200` | max diff lines injected by the prompt hook |
 | `PAIR_ASK_MAX` | `60` | seconds of recording before `ask` gives up |

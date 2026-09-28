@@ -27,3 +27,9 @@ var ClaudeBlockTemplate string
 //
 //go:embed templates/hammerspoon.lua
 var HammerspoonTemplate string
+
+// KokoroWorker is the Python program that keeps the Kokoro model loaded
+// and synthesizes sentences on request.
+//
+//go:embed templates/kokoro_worker.py
+var KokoroWorker string

@@ -26,11 +26,30 @@ type Speaker interface {
 	Speak(ctx context.Context, text string) error
 }
 
+// Preparer is a Speaker that needs time before the first sound, a neural
+// engine synthesizing the sentence: Prepare starts that work and returns
+// at once, Play makes it heard. What happens in between, the attention
+// sound, then costs nothing.
+type Preparer interface {
+	Prepare(ctx context.Context, text string) Prepared
+}
+
+// Prepared is a sentence on its way to being spoken.
+type Prepared interface {
+	Play(ctx context.Context) error
+}
+
+// Warmer is a Speaker that can get ready ahead of the first sentence.
+type Warmer interface {
+	Warm()
+}
+
 // Say speaks through macOS `say`.
 type Say struct {
-	Voice string
-	Rate  int
-	Bin   string // defaults to "say" on PATH
+	Voice    string
+	Rate     int
+	Bin      string // defaults to "say" on PATH
+	StateDir string // the session's state directory, to track the process
 }
 
 // NewSay returns a Say speaker for the given voice and words-per-minute rate.
@@ -61,11 +80,11 @@ func (s *Say) Speak(ctx context.Context, text string) error {
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
+	if err := runTracked(cmd, s.StateDir, trackSpeech); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if terminated(err) { // pkill say from `pair hook interrupt` / listen
+		if terminated(err) { // silenced by `pair hook interrupt` or listen
 			return ErrInterrupted
 		}
 		return fmt.Errorf("%s: %v: %s", bin, err, strings.TrimSpace(stderr.String()))

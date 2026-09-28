@@ -93,3 +93,51 @@ func TestSayIsInterruptedByContext(t *testing.T) {
 		t.Fatal("say was not stopped: done marker written")
 	}
 }
+
+func TestOnlyTheSessionsOwnSpeechIsSilenced(t *testing.T) {
+	bin, _ := fakeSay(t)
+	t.Setenv("FAKE_SAY_SLEEP", "5")
+	mine, other := t.TempDir(), t.TempDir()
+	type result struct {
+		who string
+		err error
+	}
+	done := make(chan result, 2)
+	for who, dir := range map[string]string{"mine": mine, "other": other} {
+		go func() {
+			done <- result{who, (&Say{Bin: bin, StateDir: dir}).Speak(context.Background(), "a long sentence")}
+		}()
+	}
+	// Wait until both are tracked, then silence one session.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a, _ := filepath.Glob(filepath.Join(mine, "run", "speech-*.pid"))
+		b, _ := filepath.Glob(filepath.Join(other, "run", "speech-*.pid"))
+		if len(a) == 1 && len(b) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the speech processes were not tracked")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	KillSpeech(mine)
+	select {
+	case r := <-done:
+		if r.who != "mine" || r.err != ErrInterrupted {
+			t.Fatalf("%s ended with %v; only mine must be interrupted", r.who, r.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("my speech was not silenced")
+	}
+	select {
+	case r := <-done:
+		t.Fatalf("the other session was disturbed: %s %v", r.who, r.err)
+	case <-time.After(400 * time.Millisecond):
+	}
+	KillSpeech(other) // end the test promptly
+	<-done
+	if left, _ := filepath.Glob(filepath.Join(mine, "run", "*.pid")); len(left) != 0 {
+		t.Fatalf("pid files left: %v", left)
+	}
+}

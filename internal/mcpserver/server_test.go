@@ -421,7 +421,9 @@ func TestStdioBinaryWithFakeSay(t *testing.T) {
 	}
 	root := t.TempDir()
 	cmd := exec.Command(bin, "mcp", "--root", root)
-	cmd.Env = append(os.Environ(), "PATH="+fakeDir+":"+os.Getenv("PATH"), "FAKE_SAY_DIR="+fakeDir, "PAIR_VOICE=Luciana", "PAIR_RATE=190", "PAIR_ACTIVE=1", "PAIR_CUE=off")
+	cmd.Env = append(os.Environ(), "PATH="+fakeDir+":"+os.Getenv("PATH"), "FAKE_SAY_DIR="+fakeDir, "PAIR_VOICE=Luciana", "PAIR_RATE=190", "PAIR_ACTIVE=1", "PAIR_CUE=off",
+		// The machine's own settings must not reach the test.
+		"HOME="+t.TempDir(), "PAIR_TTS=say", "PAIR_STT=none", "PAIR_SESSION=", "PAIR_MUTE=")
 	cmd.Stderr = os.Stderr
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)

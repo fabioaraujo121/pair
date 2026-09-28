@@ -41,6 +41,7 @@ Usage:
   pair claude        show or hide Claude Code's pane (hidden by default; F7 in the session)
   pair init [--lang en] [--voice Samantha] [--rate 190]
                      prepare this repository: hooks, CLAUDE.md block, MCP server, PAIRING.md
+  pair voice         which voice speaks; "pair voice setup kokoro" installs a natural one
   pair doctor        check dependencies and configuration
                      --fix downloads the whisper model, --mic runs the microphone test
   pair stop          kill the session and any running say/rec
@@ -132,6 +133,8 @@ func main() {
 		err = runLog(args)
 	case "presence":
 		err = runPresence()
+	case "voice":
+		err = cli.Voice(args, os.Stdout)
 	case "claude": // show or hide Claude Code's pane
 		err = hook.ToggleClaude(args, os.Stdout)
 	case "version", "-v", "--version":

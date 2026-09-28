@@ -82,6 +82,15 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 		}
 	}
 
+	if cfg.TTS == "kokoro" {
+		k := speech.NewKokoro(cfg)
+		if ok, why := k.Installed(); ok {
+			checks = append(checks, check{"kokoro voice", false, true, k.Voice + " in " + k.Dir})
+		} else {
+			checks = append(checks, check{"kokoro voice", false, false, why + "; the system voice speaks meanwhile"})
+		}
+	}
+
 	checks = append(checks, modelCheck(w, cfg, opts, hasWhisper))
 
 	if hasRec && (opts.MicTest || (stdinIsTerminal() && os.Getenv("PAIR_SKIP_MIC") == "")) {

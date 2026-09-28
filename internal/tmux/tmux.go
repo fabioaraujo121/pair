@@ -160,11 +160,53 @@ func SetState(session, state, detail string) {
 		return
 	}
 	colour := StateColour(state)
+	window := "=" + session + ":" + MainWindow // this session only: others have their own state
 	_, _ = Run(
 		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail), ";",
-		"set-option", "-g", "pane-border-style", "fg="+colour, ";",
-		"set-option", "-g", "pane-active-border-style", "fg="+colour+",bold",
+		"set-option", "-w", "-t", window, "pane-border-style", "fg="+colour, ";",
+		"set-option", "-w", "-t", window, "pane-active-border-style", "fg="+colour+",bold",
 	)
+}
+
+// MainWindow is the name of the window that holds the editor and the
+// activity column.
+const MainWindow = "pair"
+
+// RecentSession returns the pair session used last among those running,
+// for commands that come from outside any session: a global hotkey.
+func RecentSession() string {
+	out, err := Run("list-sessions", "-F", "#{session_activity} #{session_name}")
+	if err != nil {
+		return ""
+	}
+	best, bestAt := "", ""
+	for _, line := range strings.Split(out, "\n") {
+		at, name, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || Environment(name, "PAIR_ROOT") == "" {
+			continue
+		}
+		if len(at) > len(bestAt) || (len(at) == len(bestAt) && at > bestAt) {
+			best, bestAt = name, at
+		}
+	}
+	return best
+}
+
+// Sessions returns the running pair sessions and the repository of each.
+func Sessions() map[string]string {
+	out, err := Run("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		return nil
+	}
+	found := map[string]string{}
+	for _, name := range strings.Split(out, "\n") {
+		if name = strings.TrimSpace(name); name != "" {
+			if root := Environment(name, "PAIR_ROOT"); root != "" {
+				found[name] = root
+			}
+		}
+	}
+	return found
 }
 
 // Claude Code's pane is hidden by default: it lives in a background window

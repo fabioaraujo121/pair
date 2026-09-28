@@ -46,6 +46,7 @@ func (Deaf) Listen(context.Context) (Heard, error) { return Heard{Dropped: "mute
 
 // Recorder captures the microphone with sox `rec` until trailing silence.
 type Recorder struct {
+	StateDir     string        // the session's state directory, to track the process
 	Bin          string        // defaults to "rec"
 	Rate         int           // 16000
 	SilenceLevel string        // "1%"
@@ -98,7 +99,7 @@ func (r *Recorder) Record(ctx context.Context, path string) (Recording, error) {
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 2 * time.Second
-	runErr := cmd.Run()
+	runErr := runTracked(cmd, r.StateDir, trackRecord)
 
 	if ctx.Err() != nil {
 		return Recording{Path: path}, ErrInterrupted
@@ -226,6 +227,7 @@ func MicLockPath(cfg config.Config) string {
 func NewVoiceListener(cfg config.Config) *VoiceListener {
 	return &VoiceListener{
 		Rec: &Recorder{
+			StateDir:     cfg.StateDir,
 			Rate:         16000,
 			SilenceLevel: cfg.SilenceLevel,
 			SilenceSecs:  cfg.SilenceSecs,
@@ -321,10 +323,4 @@ func PlaySound(ctx context.Context, path string) {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_ = exec.CommandContext(ctx, "afplay", path).Run()
-}
-
-// KillSpeech terminates any running `say`, for the interrupt and
-// push-to-talk paths that run outside the MCP server process.
-func KillSpeech() {
-	_ = exec.Command("pkill", "-x", "say").Run()
 }

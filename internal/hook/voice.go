@@ -82,7 +82,7 @@ func Interrupt(args []string, out io.Writer) error {
 		return nil
 	}
 	defer lock.Release()
-	speech.KillSpeech()
+	speech.KillSpeech(cfg.StateDir)
 	log := events.Open(cfg.StateDir)
 	if tmux.HasSession(cfg.Session) {
 		if err := tmux.SendEscape(cfg.Session); err != nil {
@@ -115,7 +115,7 @@ func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
 // Claude is waiting on when there is one (answerAsk), otherwise into Claude
 // Code's input as a new prompt.
 func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
-	speech.KillSpeech()
+	speech.KillSpeech(cfg.StateDir)
 	log := events.Open(cfg.StateDir)
 	listener, err := speech.NewListener(cfg, false) // the caller holds the lock
 	if err != nil {
@@ -211,28 +211,31 @@ func repeated(cfg config.Config, text string) bool {
 	return same
 }
 
-// voiceConfig resolves the repository for a voice command.
+// voiceConfig finds the session a voice command is for: the one named by
+// --root, the one the command was started from (a key pressed inside a
+// session), the one of the working directory when it is running, else the
+// session used last (a global hotkey pressed outside any terminal).
 func voiceConfig(args []string) config.Config {
-	root := ""
 	for i := 0; i < len(args); i++ {
 		if args[i] == "--root" && i+1 < len(args) {
-			root = args[i+1]
+			return config.Load(filepath.Clean(strings.TrimSpace(args[i+1])))
 		}
 	}
-	if root == "" {
-		session := os.Getenv("PAIR_SESSION")
-		if session == "" {
-			session = config.DefaultSession
-		}
-		if r := tmux.Environment(session, "PAIR_ROOT"); r != "" {
-			root = r
+	if name := os.Getenv("PAIR_SESSION"); name != "" {
+		if root := tmux.Environment(name, "PAIR_ROOT"); root != "" {
+			return config.Load(root)
 		}
 	}
-	if root == "" {
-		root, _ = os.Getwd()
+	here := config.Load("")
+	if tmux.HasSession(here.Session) {
+		return here
 	}
-	root = filepath.Clean(strings.TrimSpace(root))
-	return config.Load(root)
+	if name := tmux.RecentSession(); name != "" {
+		if root := tmux.Environment(name, "PAIR_ROOT"); root != "" {
+			return config.Load(root)
+		}
+	}
+	return here
 }
 
 // showClaudeIfWaiting opens Claude Code's pane when it sits on a dialog

@@ -15,11 +15,13 @@ func NewSpeaker(cfg config.Config) (Speaker, error) {
 	}
 	switch cfg.TTS {
 	case "", "say":
-		return NewSay(cfg.Voice, cfg.Rate), nil
+		return &Say{Voice: cfg.Voice, Rate: cfg.Rate, StateDir: cfg.StateDir}, nil
+	case "kokoro":
+		return NewKokoro(cfg), nil
 	case "silent", "none":
 		return Silent{}, nil
 	default:
-		return nil, fmt.Errorf("PAIR_TTS=%q: unknown text-to-speech adapter (available: say, silent)", cfg.TTS)
+		return nil, fmt.Errorf("PAIR_TTS=%q: unknown text-to-speech adapter (available: say, kokoro, silent)", cfg.TTS)
 	}
 }
 

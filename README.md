@@ -82,6 +82,37 @@ pair doctor --fix   # checks every dependency and downloads the whisper model (1
 pair doctor --mic   # records one second so macOS asks for microphone access
 ```
 
+## A more natural voice
+
+The system voice that ships with macOS sounds synthetic. Two ways to a
+more natural one, both free and both running on your Mac:
+
+**Kokoro**, a neural voice engine (recommended):
+
+```sh
+brew install uv            # provides the Python it needs
+pair voice setup kokoro    # installs it in ~/.pair/kokoro, about 500 MB, and switches to it
+pair voice test            # hear it
+pair voice list            # 54 voices: American and British English, Brazilian Portuguese, …
+pair voice use kokoro am_michael
+pair voice use say         # back to the system voice
+```
+
+A narration sentence takes about a second to synthesize on Apple Silicon,
+and that second overlaps with the attention sound, so speech starts about
+as fast as before. Sentences are played one by one: the first is heard
+while the second is being synthesized. Interrupting works the same. If the
+engine cannot start, the system voice speaks instead and the activity
+column says why; a narration is never lost.
+
+A Portuguese Kokoro voice pronounces English technical terms with a
+Portuguese accent. For mixed sentences an English voice, or the system
+voice, is clearer.
+
+**Apple's Premium voices**: download one under System Settings →
+Accessibility → Spoken Content → Manage Voices, then
+`pair voice use say "Ava (Premium)"`.
+
 Voices: the default is `Samantha` (English). Better-sounding "Enhanced" and
 "Premium" voices are free downloads under System Settings → Accessibility →
 Spoken Content → Manage Voices; select one with `pair init --voice "Ava
@@ -165,6 +196,11 @@ pair replay checkout          # play one back
 - The running session writes to `.pair/events.jsonl`; the others live in
   `.pair/sessions/<id>/`. Deleting a folder there deletes that session.
 
+Every repository has its own session, so several can be open at once, each
+in its own terminal. A command acts on the session of the repository it is
+run in and on no other: `pair stop` in one repository never ends the
+session of another, and interrupting silences only its own voice.
+
 Claude Code started any other way in the same repository (a plain `claude`
 in another terminal) is left alone: the hooks and the voice tools act only
 inside a pair session, and that conversation writes nothing to it.
@@ -201,6 +237,7 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair resume <id or name>` | open a past session again, with Claude's conversation |
 | `pair rename [<id or name>] <new name>` | name a session |
 | `pair init [--lang en] [--voice Samantha] [--rate 190]` | prepare the repository (see above) and save your voice settings |
+| `pair voice [setup kokoro \| use \| list \| test]` | which voice speaks; install and choose a natural one |
 | `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
 | `pair claude` | show or hide Claude Code's pane (what `F7` runs) |
 | `pair stop` | kill the session and any running `say`/`rec` |
@@ -271,7 +308,7 @@ for you and updates the language line in `CLAUDE.md`.
 | `PAIR_ASK_MAX` | `60` | longest single recording, in seconds |
 | `PAIR_SILENCE_SECS` | `1.5` | pause that ends a recording |
 | `PAIR_SILENCE_LEVEL` | `1%` | amplitude below which sox counts silence |
-| `PAIR_SESSION` | `pair` | tmux session name |
+| `PAIR_SESSION` | `pair-<directory>-<hash>` | tmux session name, one per repository |
 | `PAIR_TMUX_SOCKET` | `pair` | name of pair's tmux server |
 | `PAIR_LOG_WIDTH` | `36%` | width of the activity log |
 | `PAIR_CLAUDE` | `hidden` | `shown` starts the session with Claude Code's pane open |
@@ -282,7 +319,9 @@ for you and updates the language line in `CLAUDE.md`.
 | `PAIR_HIGHLIGHT_TTL` | `20` | seconds before the "about to change" highlight clears |
 | `PAIR_DIFF_TTL` | `120` | seconds a drawn change stays visible in Neovim (`0` = until the next one) |
 | `PAIR_DIFF_LIMIT` | `200` | max diff lines injected at a prompt |
-| `PAIR_TTS` / `PAIR_STT` | `say` / `whisper` | adapters (see below) |
+| `PAIR_TTS` / `PAIR_STT` | `say` / `whisper` | adapters: `say` or `kokoro`; `whisper` |
+| `PAIR_KOKORO_VOICE` | by language | Kokoro voice, for example `af_heart`, `am_michael`, `pf_dora` |
+| `PAIR_KOKORO_SPEED` | `1.0` | Kokoro pace; `1.1` is a little faster |
 | `PAIR_MUTE` | | log without speaking or listening (tests, demos) |
 | `PAIR_CLAUDE_ARGS` | | extra arguments for the `claude` command, for example `--model opus` |
 | `PAIR_TRACK_SCRATCHPAD` | | set to keep `PAIRING.md` out of `.gitignore` |
@@ -311,6 +350,9 @@ type Listener interface {
 
 Implement one, add a case to `NewSpeaker` / `NewListener` in
 `internal/speech/factory.go`, and select it with `PAIR_TTS` / `PAIR_STT`.
+`internal/speech/kokoro.go` is a complete example of an engine that needs
+time before the first sound: it also implements `Preparer`, so synthesis
+starts while the attention sound plays.
 A `Speaker` must stop speaking when its context is cancelled; a `Listener`
 should return an empty `Heard.Text` with a `Dropped` reason rather than
 guessing.
@@ -325,7 +367,8 @@ guessing.
   hidden by default and the session works without it, but it is where
   permission prompts and Claude's typed answers appear.
 - **I attached with plain `tmux attach` and see nothing**: pair runs on its
-  own server; use `pair` or `tmux -L pair attach -t pair`.
+  own server; use `pair` in the repository, or `tmux -L pair ls` and
+  `tmux -L pair attach -t <name>`.
 - **Claude asked something and nothing happens**: the microphone is closed
   until you open it. Press `F5` or click `🎙 talk`, then answer.
 - **`ask` always returns "(no answer)"**: run `pair doctor --mic`. If no

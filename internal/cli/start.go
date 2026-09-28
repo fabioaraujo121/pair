@@ -13,6 +13,7 @@ import (
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/hook"
 	"github.com/fabioaraujo121/pair/internal/session"
+	"github.com/fabioaraujo121/pair/internal/speech"
 	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
@@ -180,7 +181,7 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 
 	// The session environment reaches every pane, so `claude` is started by
 	// name and any shell wrapper the user has around it still applies.
-	editor, err := tmuxRun("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", "pair",
+	editor, err := tmuxRun("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", tmux.MainWindow,
 		"-x", cols, "-y", lines, "-c", cfg.Root,
 		"-e", "PAIR_SOCK="+cfg.Sock, "-e", "PAIR_ROOT="+cfg.Root, "-e", "PAIR_SESSION="+s, "-e", "PAIR_ACTIVE=1",
 		"-e", "PAIR_TMUX_SOCKET="+tmux.Socket, "-e", "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0")
@@ -254,9 +255,13 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 // mouse, labelled panes, a status line with the current state and the keys.
 // They are global to the server, which is pair's own.
 func sessionChrome(exe string) [][]string {
-	listen := shellQuote(exe) + " hook listen >/dev/null 2>&1"
-	interrupt := shellQuote(exe) + " hook interrupt >/dev/null 2>&1"
-	toggle := shellQuote(exe) + " claude >/dev/null 2>&1"
+	// The bindings belong to the server, which may hold the sessions of
+	// several repositories: each command is told which session the key was
+	// pressed in. tmux expands #{session_name} when the key is pressed.
+	in := "PAIR_SESSION=#{session_name} " + shellQuote(exe)
+	listen := in + " hook listen >/dev/null 2>&1"
+	interrupt := in + " hook interrupt >/dev/null 2>&1"
+	toggle := in + " claude >/dev/null 2>&1"
 	return [][]string{
 		{"set-option", "-g", "mouse", "on"},
 		// Full colour for Neovim's syntax highlighting.
@@ -274,7 +279,7 @@ func sessionChrome(exe string) [][]string {
 		{"set-option", "-g", "status-right", "#[range=user|talk]#[fg=black,bg=white] 🎙 talk F5 #[default]#[norange] " +
 			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
 			"#[range=user|claude]#[fg=black,bg=white] ⌨ claude F7 #[default]#[norange] "},
-		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", shellQuote(exe) + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
+		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", in + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
 		// Voice keys work from any pane, with and without the prefix.
@@ -313,7 +318,8 @@ func attach(session string) error {
 	return syscall.Exec(tmuxBin, argv, os.Environ())
 }
 
-// Stop kills the tmux session and any speech or recording still running.
+// Stop ends the session of this repository, and only that one: its tmux
+// session, and the speech or recording it may have in progress.
 func Stop() error {
 	cfg := config.Load("")
 	switch {
@@ -321,16 +327,19 @@ func Stop() error {
 		if _, err := tmuxRun("kill-session", "-t", "="+cfg.Session); err != nil {
 			return err
 		}
-	case stopLegacySession(cfg.Session):
+		speech.KillSpeech(cfg.StateDir)
+		speech.KillRecording(cfg.StateDir)
+	case stopLegacySession("pair"):
 		fmt.Println("stopped a session created by an earlier version of pair")
 	default:
-		fmt.Printf("no pair session named %q\n", cfg.Session)
+		fmt.Printf("no pair session is running for %s\n", tildePath(cfg.Root))
+		for name, root := range tmux.Sessions() {
+			fmt.Printf("  %s is running for %s: stop it from there (cd %s && pair stop)\n", name, tildePath(root), tildePath(root))
+		}
+		return nil
 	}
 	if !config.IsTCP(cfg.Sock) {
 		_ = os.Remove(cfg.Sock)
-	}
-	for _, p := range []string{"say", "rec"} {
-		_ = exec.Command("pkill", "-x", p).Run()
 	}
 	session.End(cfg.StateDir, time.Now())
 	_ = events.Open(cfg.StateDir).Session("○ pair session stopped")

@@ -100,6 +100,12 @@ func New(cfg config.Config, version string) (*Server, error) {
 		srv.Cue = AttentionSound
 	}
 	srv.Inactive = !config.Active()
+	if k, ok := speaker.(*speech.Kokoro); ok {
+		k.Warn = func(msg string) { _ = srv.Log.Session("! " + msg) }
+	}
+	if w, ok := speaker.(speech.Warmer); ok && !srv.Inactive {
+		go w.Warm() // load the model before the first sentence
+	}
 	return srv, nil
 }
 
@@ -319,13 +325,24 @@ func (s *Server) speakLocked(ctx context.Context, raw, kind string) (map[string]
 		state = tmux.StateAsking
 	}
 	s.setState(state, "")
+	// A neural voice starts synthesizing now, so the attention sound
+	// below costs no time.
+	var prepared speech.Prepared
+	if p, ok := s.Speaker.(speech.Preparer); ok {
+		prepared = p.Prepare(ctx, spoken)
+	}
 	cued := false
 	if s.Cue != nil && (kind == KindAsk || s.lastSpeech.IsZero() || time.Since(s.lastSpeech) > s.CueIdle) {
 		s.Cue(ctx, kind)
 		cued = true
 	}
 	start := time.Now()
-	err := s.Speaker.Speak(ctx, spoken)
+	var err error
+	if prepared != nil {
+		err = prepared.Play(ctx)
+	} else {
+		err = s.Speaker.Speak(ctx, spoken)
+	}
 	s.lastSpeech = time.Now()
 	rec := map[string]any{
 		"text":   raw,

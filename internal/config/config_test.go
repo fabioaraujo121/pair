@@ -106,3 +106,31 @@ func TestConfigFilesAndPrecedence(t *testing.T) {
 		t.Fatalf("user config file:\n%s", text)
 	}
 }
+
+func TestEveryRepositoryHasItsOwnSession(t *testing.T) {
+	t.Setenv("PAIR_SESSION", "")
+	a := SessionFor("/Users/me/Developer/futeflow")
+	b := SessionFor("/Users/me/Developer/pair")
+	c := SessionFor("/Users/me/Clients/futeflow") // same directory name, elsewhere
+	if a == b || a == c {
+		t.Fatalf("sessions collide: %s %s %s", a, b, c)
+	}
+	if !strings.HasPrefix(a, "pair-futeflow-") || a != SessionFor("/Users/me/Developer/futeflow") {
+		t.Fatalf("name must be recognizable and stable: %s", a)
+	}
+	// tmux gives a meaning to "." and ":" in a target.
+	if n := SessionFor("/tmp/my.app: v2"); strings.ContainsAny(n, ".: ") {
+		t.Fatalf("unsafe session name %q", n)
+	}
+	if n := SessionFor("/"); !strings.HasPrefix(n, "pair-") || len(n) < 10 {
+		t.Fatalf("root directory: %q", n)
+	}
+	repo := t.TempDir()
+	if got := Load(repo).Session; got != SessionFor(repo) {
+		t.Fatalf("Load uses %q", got)
+	}
+	t.Setenv("PAIR_SESSION", "mine")
+	if got := Load(repo).Session; got != "mine" {
+		t.Fatalf("PAIR_SESSION must win: %q", got)
+	}
+}

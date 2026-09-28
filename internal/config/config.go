@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	DefaultSession      = "pair"
 	DefaultVoice        = "Samantha"
 	DefaultRate         = 190
 	DefaultLang         = "en"
@@ -51,18 +50,21 @@ type Config struct {
 	AskMax       int
 	SilenceSecs  string
 	SilenceLevel string
-	LogWidth     string // PAIR_LOG_WIDTH
-	ClaudeHeight string // PAIR_CLAUDE_HEIGHT
-	ClaudeShown  bool   // PAIR_CLAUDE=shown starts with Claude's pane open
-	ClaudeArgs   string // PAIR_CLAUDE_ARGS: extra arguments for the claude command
-	Presence     string // PAIR_PRESENCE_HEIGHT
-	AskMic       string // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
-	AskWait      int    // PAIR_ASK_WAIT seconds
-	Cue          bool   // PAIR_CUE=off disables the attention sound before speech
-	CueIdle      int    // PAIR_CUE_IDLE seconds
-	TTS          string // PAIR_TTS: text-to-speech adapter (say)
-	STT          string // PAIR_STT: speech-to-text adapter (whisper)
-	Mute         bool   // PAIR_MUTE: log narrations without speaking or listening
+	LogWidth     string  // PAIR_LOG_WIDTH
+	ClaudeHeight string  // PAIR_CLAUDE_HEIGHT
+	ClaudeShown  bool    // PAIR_CLAUDE=shown starts with Claude's pane open
+	ClaudeArgs   string  // PAIR_CLAUDE_ARGS: extra arguments for the claude command
+	Presence     string  // PAIR_PRESENCE_HEIGHT
+	AskMic       string  // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
+	AskWait      int     // PAIR_ASK_WAIT seconds
+	Cue          bool    // PAIR_CUE=off disables the attention sound before speech
+	CueIdle      int     // PAIR_CUE_IDLE seconds
+	KokoroVoice  string  // PAIR_KOKORO_VOICE; by language when empty
+	KokoroSpeed  float64 // PAIR_KOKORO_SPEED, 1.0 is the natural pace
+	KokoroModel  string  // PAIR_KOKORO_MODEL: file name in ~/.pair/kokoro
+	TTS          string  // PAIR_TTS: text-to-speech adapter (say, kokoro)
+	STT          string  // PAIR_STT: speech-to-text adapter (whisper)
+	Mute         bool    // PAIR_MUTE: log narrations without speaking or listening
 }
 
 // Load resolves the configuration for a process running in cwd. An empty cwd
@@ -104,7 +106,7 @@ func Load(cwd string) Config {
 		Root:         root,
 		StateDir:     stateDir,
 		UserDir:      userDir,
-		Session:      str("PAIR_SESSION", DefaultSession),
+		Session:      str("PAIR_SESSION", SessionFor(root)),
 		Sock:         str("PAIR_SOCK", DefaultSock(root)),
 		HighlightTTL: num("PAIR_HIGHLIGHT_TTL", DefaultHighlightTTL),
 		DiffLimit:    num("PAIR_DIFF_LIMIT", DefaultDiffLimit),
@@ -124,10 +126,20 @@ func Load(cwd string) Config {
 		AskWait:      num("PAIR_ASK_WAIT", DefaultAskWait),
 		Cue:          str("PAIR_CUE", "on") != "off",
 		CueIdle:      num("PAIR_CUE_IDLE", DefaultCueIdle),
+		KokoroVoice:  str("PAIR_KOKORO_VOICE", ""),
+		KokoroSpeed:  float(str("PAIR_KOKORO_SPEED", ""), 1.0),
+		KokoroModel:  str("PAIR_KOKORO_MODEL", "kokoro-v1.0.onnx"),
 		TTS:          str("PAIR_TTS", "say"),
 		STT:          str("PAIR_STT", "whisper"),
 		Mute:         str("PAIR_MUTE", "") != "",
 	}
+}
+
+func float(s string, def float64) float64 {
+	if v, err := strconv.ParseFloat(s, 64); err == nil && v > 0 {
+		return v
+	}
+	return def
 }
 
 // Active reports whether the process runs inside a pair session. `pair
@@ -214,6 +226,32 @@ func RepoRoot(dir string) string {
 		}
 		cur = parent
 	}
+}
+
+// SessionFor is the name of the tmux session of a repository. Every
+// repository has its own, so a command run in one repository never acts on
+// the session of another, and several can be open at once. The name holds
+// the directory name, to be recognizable, and a few characters of a hash
+// of the path, so two directories called the same do not collide.
+func SessionFor(root string) string {
+	var b strings.Builder
+	for _, r := range filepath.Base(root) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-') // tmux gives a meaning to "." and ":" in names
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		name = "repo"
+	}
+	if len(name) > 24 {
+		name = name[:24]
+	}
+	sum := sha1.Sum([]byte(root))
+	return "pair-" + name + "-" + hex.EncodeToString(sum[:])[:4]
 }
 
 // DefaultSock is the Neovim listen address for a repository: a short path in
