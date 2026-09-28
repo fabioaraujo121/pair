@@ -276,6 +276,56 @@ func TestAttentionCueBeforeSpeech(t *testing.T) {
 	}
 }
 
+func TestAskWithAClosedMicrophoneWaitsForTheEngineer(t *testing.T) {
+	s, sp, _, root := newTestServer(t)
+	listener := &fakeListener{heard: speech.Heard{Text: "must not be used"}}
+	s.Listener = listener
+	s.AskManual, s.AskWait = true, 3*time.Second
+	var states []string
+	s.State = func(state, detail string) { states = append(states, strings.TrimSpace(state+" "+detail)) }
+	sess := connect(t, s)
+	stateDir := filepath.Join(root, ".pair")
+
+	// The engineer opens the microphone a moment later: push-to-talk sees
+	// the pending question and delivers the answer.
+	go func() {
+		for i := 0; i < 100; i++ {
+			if p, ok := speech.PendingAskFor(stateDir, time.Minute); ok && p.Question != "" {
+				_ = speech.DeliverAnswer(stateDir, speech.Heard{Text: "Solid Queue.", Seconds: 1.2, RMS: 0.1})
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+	out, isErr := call(t, sess, "ask", map[string]any{"question": "Sidekiq or Solid Queue? I recommend Solid Queue."})
+	if isErr || out != "Solid Queue." {
+		t.Fatalf("ask = %q err=%v", out, isErr)
+	}
+	if listener.calls != 0 {
+		t.Fatal("the server must not open the microphone by itself")
+	}
+	if len(sp.spoken) != 1 {
+		t.Fatalf("question not spoken: %v", sp.spoken)
+	}
+	if _, ok := speech.PendingAskFor(stateDir, time.Minute); ok {
+		t.Fatal("pending question not cleared")
+	}
+	if got := strings.Join(states, " | "); !strings.Contains(got, "asking press F5 or click talk to answer") {
+		t.Fatalf("states = %s", got)
+	}
+
+	// Nobody answers: "(no answer)" after the wait.
+	s.AskWait = 300 * time.Millisecond
+	out, isErr = call(t, sess, "ask", map[string]any{"question": "Continue?"})
+	if isErr || out != "(no answer)" {
+		t.Fatalf("timeout: %q err=%v", out, isErr)
+	}
+	log, _ := os.ReadFile(filepath.Join(stateDir, "session.log"))
+	if !strings.Contains(string(log), "nobody answered within") || !strings.Contains(string(log), "the microphone is closed") {
+		t.Fatalf("session log:\n%s", log)
+	}
+}
+
 func TestSpeechIsSerialized(t *testing.T) {
 	s, sp, _, _ := newTestServer(t)
 	sp.delay = 60 * time.Millisecond

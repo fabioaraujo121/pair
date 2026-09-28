@@ -163,3 +163,54 @@ func testShowAndReload(t *testing.T, c *Client) {
 		t.Fatalf("dirty buffer was reloaded; first line = %q", first)
 	}
 }
+
+func TestDiffIsDrawnInPlace(t *testing.T) {
+	sock, stop := startNvim(t)
+	defer stop()
+	c := &Client{Addr: sock, Timeout: 3 * time.Second, Transport: "rpc"}
+	ctx := context.Background()
+	file := filepath.Join(t.TempDir(), "sample.txt")
+	writeLines(t, file, 20)
+
+	marks := `{"added":[10,11],"removed":[{"at":10,"lines":["old line ten","old line \"eleven\""]}]}`
+	if err := c.Diff(ctx, file, marks); err != nil {
+		t.Fatalf("diff: %v", err)
+	}
+	var cursor []int
+	if err := c.ExecLua(ctx, "return vim.api.nvim_win_get_cursor(0)", &cursor); err != nil {
+		t.Fatal(err)
+	}
+	if len(cursor) != 2 || cursor[0] != 10 {
+		t.Fatalf("cursor = %v, want the first changed line", cursor)
+	}
+	var summary string
+	err := c.ExecLua(ctx, `
+		local ns = vim.api.nvim_create_namespace('pair')
+		local added, removed = 0, 0
+		for _, m in ipairs(vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, { details = true })) do
+			local d = m[4]
+			if d.line_hl_group == 'PairAdd' then added = added + 1 end
+			if d.virt_lines then
+				removed = removed + #d.virt_lines
+				assert(d.virt_lines_above == true)
+				assert(d.virt_lines[1][1][1] == '- old line ten')
+			end
+		end
+		return added .. ' added, ' .. removed .. ' removed'
+	`, &summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != "2 added, 2 removed" {
+		t.Fatalf("drawn: %s", summary)
+	}
+
+	// The same call through the command-line transport.
+	cli := &Client{Addr: sock, Timeout: 5 * time.Second, Transport: "cli"}
+	if err := cli.Diff(ctx, file, `{"added":[3],"removed":[]}`); err != nil {
+		t.Fatalf("diff over cli: %v", err)
+	}
+	if err := c.ExecLua(ctx, "return vim.api.nvim_win_get_cursor(0)", &cursor); err != nil || cursor[0] != 3 {
+		t.Fatalf("cursor after cli diff = %v %v", cursor, err)
+	}
+}

@@ -55,6 +55,12 @@ type Server struct {
 	// State reports what is happening to the status bar. nil disables it.
 	State func(state, detail string)
 
+	// AskManual keeps the microphone closed after a question: the engineer
+	// opens it (key or click) and the answer is delivered by that
+	// push-to-talk. AskWait is how long the question waits.
+	AskManual bool
+	AskWait   time.Duration
+
 	speech     sync.Mutex // serializes speaking and listening: never both at once
 	lastSpeech time.Time
 }
@@ -80,7 +86,10 @@ func New(cfg config.Config, version string) (*Server, error) {
 		Version:  version,
 		Vocab:    speech.VocabularyFor(cfg.Lang),
 		CueIdle:  time.Duration(cfg.CueIdle) * time.Second,
-		State:    func(state, detail string) { tmux.SetState(cfg.Session, state, detail) },
+
+		AskManual: cfg.AskMic != "auto" && !cfg.Mute,
+		AskWait:   time.Duration(cfg.AskWait) * time.Second,
+		State:     func(state, detail string) { tmux.SetState(cfg.Session, state, detail) },
 	}
 	if cfg.Cue && !cfg.Mute {
 		srv.Cue = AttentionSound
@@ -145,7 +154,7 @@ func (s *Server) MCP() *mcp.Server {
 	}, s.show)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ask",
-		Description: "Ask the engineer one question aloud, then listen: a chime plays, the microphone records until 1.5 s of silence, and the transcript is returned (or \"(no answer)\"). One question per decision point, recommended option first, under 200 characters. Record the answer in PAIRING.md under Decisions.",
+		Description: "Ask the engineer one question aloud and wait for the spoken answer: the engineer opens the microphone, answers, and the transcript is returned (or \"(no answer)\" when nobody answers). One question per decision point, recommended option first, under 200 characters. Record the answer in PAIRING.md under Decisions.",
 	}, s.ask)
 	return srv
 }
@@ -234,9 +243,24 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 		_ = s.Log.Append("ask", rec)
 		return nil, nil, err
 	}
-	s.setState(tmux.StateListening, "")
 	start := time.Now()
-	heard, lerr := s.Listener.Listen(ctx)
+	var heard speech.Heard
+	var lerr error
+	if s.AskManual {
+		// The microphone stays closed until the engineer opens it.
+		_ = speech.SetPendingAsk(s.Cfg.StateDir, in.Question)
+		defer speech.ClearPendingAsk(s.Cfg.StateDir)
+		s.setState(tmux.StateAsking, "press F5 or click talk to answer")
+		_ = s.Log.Session("   the microphone is closed: press F5 or click 🎙 talk to answer")
+		var ok bool
+		heard, ok, lerr = speech.WaitForAnswer(ctx, s.Cfg.StateDir, s.AskWait)
+		if lerr == nil && !ok {
+			heard = speech.Heard{Dropped: fmt.Sprintf("nobody answered within %s", s.AskWait)}
+		}
+	} else {
+		s.setState(tmux.StateListening, "")
+		heard, lerr = s.Listener.Listen(ctx)
+	}
 	rec["answer"] = heard
 	rec["listen_ms"] = time.Since(start).Milliseconds()
 	if lerr != nil {

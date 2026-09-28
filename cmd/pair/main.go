@@ -85,6 +85,8 @@ func main() {
 			err = hook.Interrupt(args[1:], os.Stdout)
 		case "point":
 			err = hook.Point(args[1:], os.Stdout)
+		case "click": // a click on a status bar button
+			err = hook.Click(args[1:], os.Stdout)
 		default:
 			err = hook.Run(args[0], os.Stdin, os.Stdout)
 			// Claude Code hooks must never fail the tool call: report and exit 0.

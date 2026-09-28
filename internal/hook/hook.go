@@ -67,6 +67,7 @@ func Parse(r io.Reader) (*Input, error) {
 // Nvim is the part of the Neovim client the hooks use.
 type Nvim interface {
 	Show(ctx context.Context, file string, start, end int) (nvim.Shown, error)
+	Diff(ctx context.Context, file, marks string) error
 	Reload(ctx context.Context) error
 }
 
@@ -142,11 +143,24 @@ func (h *Handler) PreEdit(in *Input) error {
 	return nvErr
 }
 
-// PostEdit reloads Neovim and renders the file's diff into the session log.
+// PostEdit reloads Neovim, draws the change inside the file, and writes
+// its summary and diff to the activity log.
 func (h *Handler) PostEdit(in *Input) error {
 	file := h.absPath(in.ToolInput.FilePath)
 	ctx := context.Background()
 	nvErr := h.Nvim.Reload(ctx)
+	drawn := ""
+	if file != "" && nvErr == nil {
+		if m := h.marks(ctx, in, file); !m.Empty() {
+			if data, err := json.Marshal(m); err == nil {
+				if err := h.Nvim.Diff(ctx, file, string(data)); err != nil {
+					nvErr = err
+				} else {
+					drawn = m.summary()
+				}
+			}
+		}
+	}
 	if file != "" {
 		h.state(tmux.StateWorking, "edited "+h.rel(file))
 		summary, diff := h.renderDiff(ctx, file)
@@ -165,6 +179,9 @@ func (h *Handler) PostEdit(in *Input) error {
 		_ = saveState(h.Cfg.StateDir, st)
 	}
 	payload := map[string]any{"tool": in.ToolName, "file": file}
+	if drawn != "" {
+		payload["drawn"] = drawn
+	}
 	if nvErr != nil {
 		payload["nvim_error"] = nvErr.Error()
 	}

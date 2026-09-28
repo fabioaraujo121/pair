@@ -22,6 +22,7 @@ const (
 	DefaultClaudeHeight = "30%" // Claude Code strip under the editor
 	DefaultLogDiffLines = 30    // diff lines shown per edit in the activity log
 	DefaultCueIdle      = 6     // seconds of quiet after which speech is announced
+	DefaultAskWait      = 180   // seconds a question waits for the engineer to open the mic
 	DefaultHighlightTTL = 20
 	DefaultDiffLimit    = 200
 	DefaultAskMax       = 60
@@ -53,6 +54,8 @@ type Config struct {
 	LogWidth     string // PAIR_LOG_WIDTH
 	ClaudeHeight string // PAIR_CLAUDE_HEIGHT
 	LogDiffLines int    // PAIR_LOG_DIFF_LINES, 0 = only the summary line
+	AskMic       string // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
+	AskWait      int    // PAIR_ASK_WAIT seconds
 	Cue          bool   // PAIR_CUE=off disables the attention sound before speech
 	CueIdle      int    // PAIR_CUE_IDLE seconds
 	TTS          string // PAIR_TTS: text-to-speech adapter (say)
@@ -113,6 +116,8 @@ func Load(cwd string) Config {
 		LogWidth:     str("PAIR_LOG_WIDTH", DefaultLogWidth),
 		ClaudeHeight: str("PAIR_CLAUDE_HEIGHT", DefaultClaudeHeight),
 		LogDiffLines: num("PAIR_LOG_DIFF_LINES", DefaultLogDiffLines),
+		AskMic:       str("PAIR_ASK_MIC", "manual"),
+		AskWait:      num("PAIR_ASK_WAIT", DefaultAskWait),
 		Cue:          str("PAIR_CUE", "on") != "off",
 		CueIdle:      num("PAIR_CUE_IDLE", DefaultCueIdle),
 		TTS:          str("PAIR_TTS", "say"),

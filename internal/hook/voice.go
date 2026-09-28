@@ -28,7 +28,25 @@ func Listen(args []string, out io.Writer) error {
 		return nil
 	}
 	defer lock.Release()
-	return listenAndInject(cfg, out)
+	return listenAndInject(cfg, out, true)
+}
+
+// Click handles a click on one of the status bar buttons.
+func Click(args []string, out io.Writer) error {
+	if len(args) == 0 {
+		return nil
+	}
+	switch args[0] {
+	case "talk":
+		return Listen(args[1:], out)
+	case "stop":
+		return Interrupt(args[1:], out)
+	case "claude":
+		cfg := voiceConfig(args[1:])
+		_, err := tmux.Run("resize-pane", "-Z", "-t", tmux.ClaudePane(cfg.Session))
+		return err
+	}
+	return nil // a click anywhere else on the status bar
 }
 
 // Interrupt stops Claude mid-turn and hands the microphone to the engineer:
@@ -52,7 +70,8 @@ func Interrupt(args []string, out io.Writer) error {
 	}
 	_ = log.Append("interrupt", nil)
 	_ = log.Session("✋ interrupted")
-	return listenAndInject(cfg, out)
+	speech.ClearPendingAsk(cfg.StateDir) // the question was cancelled with the turn
+	return listenAndInject(cfg, out, false)
 }
 
 // micLock takes the cross-process microphone lock without waiting. A press
@@ -70,7 +89,10 @@ func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
 	return lock, false
 }
 
-func listenAndInject(cfg config.Config, out io.Writer) error {
+// listenAndInject records once and routes the transcript: to the question
+// Claude is waiting on when there is one (answerAsk), otherwise into Claude
+// Code's input as a new prompt.
+func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	speech.KillSpeech()
 	log := events.Open(cfg.StateDir)
 	listener, err := speech.NewListener(cfg, false) // the caller holds the lock
@@ -84,8 +106,17 @@ func listenAndInject(cfg config.Config, out io.Writer) error {
 		tmux.SetState(cfg.Session, tmux.StateListening, "")
 	}
 	heard, err := listener.Listen(ctx)
+	_, asked := speech.PendingAskFor(cfg.StateDir, time.Duration(cfg.AskWait+60)*time.Second)
+	asked = asked && answerAsk
 	if inSession {
-		tmux.SetState(cfg.Session, tmux.StateIdle, "")
+		switch {
+		case asked && heard.Text == "":
+			tmux.SetState(cfg.Session, tmux.StateAsking, "press F5 or click talk to answer")
+		case asked:
+			tmux.SetState(cfg.Session, tmux.StateWorking, "")
+		default:
+			tmux.SetState(cfg.Session, tmux.StateIdle, "")
+		}
 	}
 	payload := map[string]any{"heard": heard}
 	if err != nil {
@@ -107,6 +138,17 @@ func listenAndInject(cfg config.Config, out io.Writer) error {
 			tmux.Message(cfg.Session, "🎙 nothing sent: "+heard.Dropped)
 		}
 		fmt.Fprintf(out, "(nothing sent: %s)\n", heard.Dropped)
+		return nil
+	}
+	if asked {
+		// Claude is waiting on a question: this is its answer, not a prompt.
+		if err := speech.DeliverAnswer(cfg.StateDir, heard); err != nil {
+			return err
+		}
+		if inSession {
+			tmux.Message(cfg.Session, "👤 answered: "+heard.Text)
+		}
+		fmt.Fprintln(out, heard.Text)
 		return nil
 	}
 	_ = log.Session("🎙 " + heard.Text)

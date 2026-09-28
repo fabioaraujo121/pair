@@ -74,6 +74,12 @@ func TestLocateRange(t *testing.T) {
 type fakeNvim struct {
 	shows   []nvim.Shown
 	reloads int
+	diffs   []string
+}
+
+func (f *fakeNvim) Diff(_ context.Context, file, marks string) error {
+	f.diffs = append(f.diffs, file+" "+marks)
+	return nil
 }
 
 func (f *fakeNvim) Show(_ context.Context, file string, s, e int) (nvim.Shown, error) {
@@ -215,5 +221,70 @@ func TestNotifyRaisesAttentionForPermissionPrompts(t *testing.T) {
 	_ = h.Notify(&Input{Message: "Claude is waiting for your input", Notification: "idle_prompt"})
 	if log, _ := os.ReadFile(filepath.Join(root, ".pair", "session.log")); strings.Contains(string(log), "needs you") {
 		t.Fatalf("idle reminder must not alert:\n%s", log)
+	}
+}
+
+func TestMarksFromClaudeCodePatch(t *testing.T) {
+	// A change in the middle of a file: two lines replaced by three.
+	hunks := []Hunk{{OldStart: 8, OldLines: 5, NewStart: 8, NewLines: 6, Lines: []string{
+		" ", "   def valid?", "-    !name.empty?", "-    true", "+    return false if name.empty?", "+", "+    email.include?(\"@\")", "   end",
+	}}}
+	m := MarksFromHunks(hunks)
+	if len(m.Added) != 3 || m.Added[0] != 10 || m.Added[2] != 12 {
+		t.Fatalf("added = %v", m.Added)
+	}
+	if len(m.Removed) != 1 || m.Removed[0].At != 10 || len(m.Removed[0].Lines) != 2 || m.Removed[0].Lines[0] != "    !name.empty?" {
+		t.Fatalf("removed = %+v", m.Removed)
+	}
+	if m.summary() != "+3 −2" {
+		t.Fatalf("summary = %s", m.summary())
+	}
+	// Pure deletion at the end of a hunk.
+	m = MarksFromHunks([]Hunk{{NewStart: 3, Lines: []string{" keep", "-gone", "-gone too"}}})
+	if len(m.Added) != 0 || len(m.Removed) != 1 || m.Removed[0].At != 4 {
+		t.Fatalf("deletion: %+v", m)
+	}
+}
+
+func TestParseUnifiedDiff(t *testing.T) {
+	diff := "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -2 +2,2 @@ ctx\n-two\n+TWO\n+two and a half\n@@ -9,0 +11 @@\n+new tail\n\\ No newline at end of file\n"
+	hunks := ParseUnified(diff)
+	if len(hunks) != 2 || hunks[0].NewStart != 2 || hunks[1].NewStart != 11 {
+		t.Fatalf("hunks = %+v", hunks)
+	}
+	m := MarksFromHunks(hunks)
+	if len(m.Added) != 3 || m.Added[0] != 2 || m.Added[1] != 3 || m.Added[2] != 11 || len(m.Removed) != 1 || m.Removed[0].At != 2 {
+		t.Fatalf("marks = %+v", m)
+	}
+}
+
+func TestPostEditDrawsTheChangeInTheEditor(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "user.rb")
+	_ = os.WriteFile(file, []byte("class User\n  def valid?\n    email.include?(\"@\")\n  end\nend\n"), 0o644)
+	fn := &fakeNvim{}
+	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair")}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: fn}
+	in, err := Parse(strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + file + `"},"tool_response":{"filePath":"` + file + `","structuredPatch":[{"oldStart":1,"oldLines":5,"newStart":1,"newLines":5,"lines":[" class User","   def valid?","-    true","+    email.include?(\"@\")","   end"," end"]}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.PostEdit(in); err != nil {
+		t.Fatal(err)
+	}
+	if len(fn.diffs) != 1 || !strings.Contains(fn.diffs[0], `"added":[3]`) || !strings.Contains(fn.diffs[0], `"at":3`) || !strings.Contains(fn.diffs[0], "    true") {
+		t.Fatalf("diff sent to the editor: %v", fn.diffs)
+	}
+	ev, _ := os.ReadFile(filepath.Join(root, ".pair", "events.jsonl"))
+	if !strings.Contains(string(ev), `"drawn":"+1 −1"`) {
+		t.Fatalf("event:\n%s", ev)
+	}
+
+	// A new file created by Write: every line is new.
+	fresh := filepath.Join(root, "fresh.rb")
+	_ = os.WriteFile(fresh, []byte("a\nb\nc\n"), 0o644)
+	in, _ = Parse(strings.NewReader(`{"tool_name":"Write","tool_input":{"file_path":"` + fresh + `"},"tool_response":{"type":"create","filePath":"` + fresh + `","structuredPatch":[]}}`))
+	_ = h.PostEdit(in)
+	if len(fn.diffs) != 2 || !strings.Contains(fn.diffs[1], `"added":[1,2,3]`) {
+		t.Fatalf("new file: %v", fn.diffs)
 	}
 }

@@ -48,6 +48,12 @@ func (c *Client) Show(ctx context.Context, file string, start, end int) (Shown, 
 	return out, err
 }
 
+// Diff draws a change inside the file: marks is the JSON of the added line
+// numbers and the removed blocks (see hook.Marks).
+func (c *Client) Diff(ctx context.Context, file, marks string) error {
+	return c.ExecLua(ctx, "return require('pair').diff(...)", nil, file, marks)
+}
+
 // Reload runs :checktime so buffers pick up files changed on disk.
 func (c *Client) Reload(ctx context.Context) error {
 	return c.ExecLua(ctx, "return require('pair').reload()", nil)

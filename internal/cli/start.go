@@ -54,7 +54,7 @@ func Start() error {
 	}
 	_ = log.Append("session_start", map[string]any{"root": cfg.Root, "sock": cfg.Sock, "lang": cfg.Lang, "voice": cfg.Voice})
 	_ = log.Session("● pair session started in " + tildePath(cfg.Root))
-	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. F5 talk · F6 interrupt · F7 Claude full screen", cfg.Lang, cfg.Voice))
+	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. The microphone is closed until you press F5 or click 🎙 talk.", cfg.Lang, cfg.Voice))
 	return attach(cfg.Session)
 }
 
@@ -141,7 +141,11 @@ func sessionChrome(exe, claudePane string) [][]string {
 		{"set-option", "-g", "status-left-length", "90"},
 		{"set-option", "-g", "status-left", " pair #{@pair_state} "},
 		{"set-option", "-g", "status-right-length", "90"},
-		{"set-option", "-g", "status-right", " F5 talk · F6 interrupt · F7 Claude full screen · `pair stop` quits "},
+		// Buttons: clicking one runs `pair hook click <name>`.
+		{"set-option", "-g", "status-right", "#[range=user|talk]#[fg=black,bg=white] 🎙 talk F5 #[default]#[norange] " +
+			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
+			"#[range=user|claude]#[fg=black,bg=white] claude F7 #[default]#[norange] "},
+		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", shellQuote(exe) + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
 		// Voice keys work from any pane, with and without the prefix.
