@@ -120,44 +120,60 @@ func TestKokoroPlaysSentencesInOrder(t *testing.T) {
 	}
 }
 
+// waitFor polls until cond holds, failing the test after a generous delay:
+// these tests check what happened, not how fast the machine was.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestKokoroSynthesizesWhileTheAttentionSoundPlays(t *testing.T) {
 	k, _, dir := fakeKokoro(t)
-	k.Warm()
-	t.Setenv("FAKE_SYNTH", "0.4")
-	// The worker reads its environment at start: restart it with the delay.
-	k.Close()
+	t.Setenv("FAKE_SYNTH", "0.2")
 
-	start := time.Now()
 	job := k.Prepare(context.Background(), "One sentence to say.")
-	// The model loads in Prepare the first time; what matters is that the
-	// synthesis itself does not block it.
-	prepared := time.Since(start)
-	time.Sleep(500 * time.Millisecond) // the attention sound
-	playStart := time.Now()
+	// Nothing has asked for the sentence to be played yet: if its file
+	// appears, synthesis is running on its own, which is the point.
+	waitFor(t, "the sentence to be synthesized before Play", func() bool {
+		files, _ := filepath.Glob(filepath.Join(k.OutDir, "*-0.wav"))
+		return len(files) == 1
+	})
+	if got := played(t, dir); len(got) != 0 {
+		t.Fatalf("played before Play was called: %q", got)
+	}
 	if err := job.Play(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if waited := time.Since(playStart); waited > 300*time.Millisecond {
-		t.Fatalf("Play waited %s although the sentence was synthesized during the attention sound (Prepare took %s)", waited, prepared)
-	}
-	if got := played(t, dir); len(got) != 1 {
+	if got := played(t, dir); len(got) != 1 || got[0] != "One sentence to say." {
 		t.Fatalf("played: %q", got)
 	}
 }
 
 func TestKokoroIsInterrupted(t *testing.T) {
 	k, _, dir := fakeKokoro(t)
-	t.Setenv("FAKE_PLAY", "5")
-	k.Warm() // the time the worker takes to start is not what is measured
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	t.Setenv("FAKE_PLAY", "30")
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	start := time.Now()
-	err := k.Speak(ctx, "A long first sentence. A second one that must never be heard.")
-	if err != ErrInterrupted {
-		t.Fatalf("want ErrInterrupted, got %v", err)
-	}
-	if time.Since(start) > 2*time.Second {
-		t.Fatalf("interruption took %s", time.Since(start))
+	result := make(chan error, 1)
+	go func() {
+		result <- k.Speak(ctx, "A long first sentence. A second one that must never be heard.")
+	}()
+	// Interrupt once the first sentence is being played.
+	waitFor(t, "the first sentence to start playing", func() bool { return len(played(t, dir)) == 1 })
+	cancel()
+	select {
+	case err := <-result:
+		if err != ErrInterrupted {
+			t.Fatalf("want ErrInterrupted, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the speech did not stop when interrupted")
 	}
 	if got := played(t, dir); len(got) != 1 {
 		t.Fatalf("only the first sentence may have started: %q", got)

@@ -55,6 +55,8 @@ type Server struct {
 	CueIdle time.Duration
 	// State reports what is happening to the status bar. nil disables it.
 	State func(state, detail string)
+	// MicClosed reports that the microphone this server opened is closed.
+	MicClosed func(state, detail string)
 
 	// Inactive is set when Claude Code runs outside a pair session: the
 	// tools answer at once, without speaking, listening or logging.
@@ -95,6 +97,7 @@ func New(cfg config.Config, version string) (*Server, error) {
 		AskManual: cfg.AskMic != "auto" && !cfg.Mute,
 		AskWait:   time.Duration(cfg.AskWait) * time.Second,
 		State:     func(state, detail string) { status.Set(cfg, state, detail) },
+		MicClosed: func(state, detail string) { status.ListeningDone(cfg, state, detail) },
 	}
 	if cfg.Cue && !cfg.Mute {
 		srv.Cue = AttentionSound
@@ -285,6 +288,9 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 	} else {
 		s.setState(tmux.StateListening, "")
 		heard, lerr = s.Listener.Listen(ctx)
+		if s.MicClosed != nil {
+			s.MicClosed(tmux.StateWorking, "")
+		}
 	}
 	rec["answer"] = heard
 	rec["listen_ms"] = time.Since(start).Milliseconds()

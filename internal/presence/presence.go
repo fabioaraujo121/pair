@@ -157,7 +157,7 @@ func Frame(st status.Status, frame, width int, now time.Time, color bool) []stri
 	case tmux.StateAsking:
 		label += " · press F5 to answer"
 	case tmux.StateListening:
-		label += " · speak, then pause"
+		label += " · pause or press F5 to send"
 	case tmux.StateAttention:
 		label += " · press F7"
 	}

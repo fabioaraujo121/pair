@@ -10,16 +10,16 @@ and MCP tools for the events. No cloud, no daemon, no fork of Claude Code.
 
 ```
 ┌─ files: what Claude reads and changes ───────┬─ claude ────────────────────┐
-│  ▸ app/        │  9   def valid?             │  ⠹ Claude is working  0:42  │
-│  ▾ models/     │    -     !name.empty?       │  ▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂ │
-│     user.rb    │+ 10     return false if …   │  editing app/models/user.rb │
-│  ▸ spec/       │+ 11                         ├─ activity: what and why ────┤
-│                │+ 12     email.include?("@") │ you  10:14                  │
-│                │  13   end                   │   add email validation      │
-│                ├─────────────────────────────│                             │
-│                │ PAIRING.md                  │ claude  10:14               │
-│                │ ## Plan                     │   I'll add the validation   │
-│                │ - validate email format     │   in the model, because …   │
+│  ▸ app/        │  8                          │  ⠹ Claude is working  0:42  │
+│  ▾ models/     │  9   def valid?             │  ▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂▁▁▂▄▆█▆▄▂ │
+│     user.rb    │    -     !name.empty?       │  editing app/models/user.rb │
+│  ▸ spec/       │+ 10     return false if …   ├─ activity: what and why ────┤
+│  README.md     │+ 11                         │ you  10:14                  │
+│  PAIRING.md    │+ 12     email.include?("@") │   add email validation      │
+│                │  13   end                   │                             │
+│                │  14 end                     │ claude  10:14               │
+│                │                             │   I'll add the validation   │
+│                │                             │   in the model, because …   │
 │                │                             │   ✎ app/models/user.rb +3 −1│
 └────────────────┴─────────────────────────────┴─────────────────────────────┘
  pair ● Claude is working: editing user.rb   🎙 talk F5  ✋ interrupt F6  ⌨ claude F7
@@ -41,8 +41,9 @@ changing, and why.
   | Claude needs you | the whole row blinking | red |
   | your turn | a calm line with one slow dot | green |
 
-- **Which files?** Neovim is the main area: project tree, the file Claude is
-  in with the change drawn in place, and `PAIRING.md` below.
+- **Which files?** Neovim is the main area: the project tree and one file,
+  the one Claude is in, with the change drawn in place. `PAIRING.md` takes
+  that place when Claude writes to it, or when you ask for it.
 - **Why?** The activity column is the conversation: what you said, what
   Claude said, and a card per edit.
 
@@ -156,9 +157,11 @@ In the session:
    `pair replay` plays it back.
 
 **The microphone is closed by default.** Nothing is recorded until you
-press `F5`/`F6` or click a button, and each press records one utterance,
-ending when you pause for 1.5 s. Extra presses while it records are
-ignored.
+press `F5`/`F6` or click a button. While it is open the `talk` button reads
+`■ stop`, in red, whatever Claude is doing meanwhile. The recording ends
+when you pause for 1.5 s, or at once when you press `F5` again or click
+`stop`; either way what you said is sent. Holding the key down does not
+count as pressing it again.
 
 The status bar always shows one of: `● Claude is working`, `🗣 Claude is
 speaking`, `❓ Claude is asking you`, `🎙 listening`, `○ your turn`, or
@@ -210,12 +213,13 @@ inside a pair session, and that conversation writes nothing to it.
 | Where | Key | Does |
 | --- | --- | --- |
 | Anywhere in the session | `F5`, `C-b t`, or click `🎙 talk` | open the mic: record, transcribe, send to Claude (or answer its question) |
+| While the mic is open | `F5` again, or click `■ stop` | end the recording now and send what you said |
 | Anywhere in the session | `F6`, `C-b i`, or click `✋ interrupt` | interrupt Claude, then open the mic |
 | Anywhere in the session | `F7`, `C-b c`, or click `⌨ claude` | show Claude Code's pane under the editor, or hide it |
 | Anywhere in the session | mouse click, `C-b` + arrows | switch pane |
 | Neovim | `<leader>pt` / `<leader>pi` | same as `F5` / `F6` |
 | Neovim (visual) | `<leader>pp` | point Claude at the selected lines, with an optional note |
-| Neovim | `<leader>ps` | toggle the `PAIRING.md` split |
+| Neovim | `<leader>ps` | show `PAIRING.md` in the editor, or go back to the file |
 | Neovim tree | `Enter` | open the file in the editor window |
 | Outside the terminal | ctrl+alt+cmd+space / esc | push-to-talk / interrupt, with Hammerspoon |
 

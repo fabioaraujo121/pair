@@ -76,9 +76,8 @@ func Start(args []string) error {
 	if continued {
 		kind, word = "session_continue", "continued"
 	}
-	_ = log.Append(kind, map[string]any{"root": cfg.Root, "sock": cfg.Sock, "lang": cfg.Lang, "voice": cfg.Voice, "id": meta.ID, "name": meta.Label()})
+	_ = log.Append(kind, map[string]any{"root": cfg.Root, "id": meta.ID, "name": meta.Label()})
 	_ = log.Session(fmt.Sprintf("● pair session %s %s in %s", meta.Label(), word, tildePath(cfg.Root)))
-	_ = log.Session(fmt.Sprintf("  speaking %s with voice %s. The microphone is closed until you press F5 or click 🎙 talk. F7 shows Claude Code.", cfg.Lang, cfg.Voice))
 	return attach(cfg.Session)
 }
 
@@ -276,7 +275,7 @@ func sessionChrome(exe string) [][]string {
 		{"set-option", "-g", "status-left", " pair #{@pair_state} "},
 		{"set-option", "-g", "status-right-length", "90"},
 		// Buttons: clicking one runs `pair hook click <name>`.
-		{"set-option", "-g", "status-right", "#[range=user|talk]#[fg=black,bg=white] 🎙 talk F5 #[default]#[norange] " +
+		{"set-option", "-g", "status-right", "#[range=user|talk]#{?#{==:#{@pair_mic},on},#[fg=white#,bg=red#,bold] ■ stop F5 ,#[fg=black#,bg=white] 🎙 talk F5 }#[default]#[norange] " +
 			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
 			"#[range=user|claude]#[fg=black,bg=white] ⌨ claude F7 #[default]#[norange] "},
 		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", in + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},

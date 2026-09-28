@@ -24,8 +24,16 @@ import (
 // pauses, transcribe, and type the transcript into the Claude Code pane.
 func Listen(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
+	wantsStop := speech.PressWantsStop(cfg.StateDir, time.Now())
 	lock, busy := micLock(cfg, out)
 	if busy {
+		// The microphone is open: a new press of the key, or a click on
+		// the button that now reads "stop", ends the recording. What was
+		// said is transcribed and sent by the command that is recording.
+		if wantsStop {
+			speech.KillRecording(cfg.StateDir)
+			fmt.Fprintln(out, "(recording stopped)")
+		}
 		return nil
 	}
 	defer lock.Release()
@@ -105,7 +113,6 @@ func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
 	}
 	lock, err := speech.AcquireMic(context.Background(), speech.MicLockPath(cfg), false)
 	if err != nil {
-		fmt.Fprintln(out, "(already listening)")
 		return nil, true
 	}
 	return lock, false
@@ -132,15 +139,17 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	_, asked := speech.PendingAskFor(cfg.StateDir, time.Duration(cfg.AskWait+60)*time.Second)
 	asked = asked && answerAsk
 	if inSession {
+		// The microphone closes: show what Claude reported while it was
+		// open, or else where things stand.
 		switch {
 		case asked && heard.Text == "":
-			status.Set(cfg, tmux.StateAsking, "press F5 or click talk to answer")
+			status.ListeningDone(cfg, tmux.StateAsking, "press F5 or click talk to answer")
 		case asked:
-			status.Set(cfg, tmux.StateWorking, "")
-		case heard.Text == "" && before.State == tmux.StateWorking:
-			status.Set(cfg, tmux.StateWorking, before.Detail) // nothing was said: Claude is still at it
+			status.ListeningDone(cfg, tmux.StateWorking, "")
+		case before.State != tmux.StateIdle && before.State != tmux.StateListening:
+			status.ListeningDone(cfg, before.State, before.Detail) // Claude is still at what it was doing
 		default:
-			status.Set(cfg, tmux.StateIdle, "")
+			status.ListeningDone(cfg, tmux.StateIdle, "")
 		}
 	}
 	payload := map[string]any{"heard": heard}

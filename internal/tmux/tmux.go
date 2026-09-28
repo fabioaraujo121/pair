@@ -121,7 +121,7 @@ func RenderState(state, detail string) string {
 	case StateAsking:
 		style, text = "fg=white,bg=magenta", "❓ Claude is asking you"
 	case StateListening:
-		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause"
+		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause or press F5"
 	case StateAttention:
 		style, text = "fg=white,bg=red", "⚠ Claude needs you"
 	}
@@ -161,8 +161,13 @@ func SetState(session, state, detail string) {
 	}
 	colour := StateColour(state)
 	window := "=" + session + ":" + MainWindow // this session only: others have their own state
+	mic := "off"                               // the talk button reads "stop" while the microphone is open
+	if state == StateListening {
+		mic = "on"
+	}
 	_, _ = Run(
 		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail), ";",
+		"set-option", "-t", "="+session+":", "@pair_mic", mic, ";",
 		"set-option", "-w", "-t", window, "pane-border-style", "fg="+colour, ";",
 		"set-option", "-w", "-t", window, "pane-active-border-style", "fg="+colour+",bold",
 	)

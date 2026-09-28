@@ -53,12 +53,12 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 	case "session_start", "session_continue":
 		what := "session started"
 		if e.Type == "session_continue" {
-			what = "session continued, Claude remembers the conversation above"
+			what = "session continued · Claude remembers the conversation above"
 		}
 		if name := str(p, "name"); name != "" && name != str(p, "id") {
 			what = "“" + name + "” · " + what
 		}
-		return one(Entry{Dim: true, Text: fmt.Sprintf("%s · speaking %s, voice %s · the microphone is closed until you press F5 or click talk", what, str(p, "lang"), str(p, "voice"))})
+		return one(Entry{Dim: true, Text: what})
 
 	case "listen":
 		h, _ := p["heard"].(map[string]any)

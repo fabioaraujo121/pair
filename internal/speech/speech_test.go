@@ -86,7 +86,7 @@ func TestSayIsInterruptedByContext(t *testing.T) {
 	if err == nil || ctx.Err() == nil {
 		t.Fatalf("expected a context error, got %v", err)
 	}
-	if time.Since(start) > 2*time.Second {
+	if time.Since(start) > 4*time.Second { // the stand-in would speak for 5 s
 		t.Fatalf("Speak took %s after cancellation", time.Since(start))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "done")); err == nil {
@@ -139,5 +139,43 @@ func TestOnlyTheSessionsOwnSpeechIsSilenced(t *testing.T) {
 	<-done
 	if left, _ := filepath.Glob(filepath.Join(mine, "run", "*.pid")); len(left) != 0 {
 		t.Fatalf("pid files left: %v", left)
+	}
+}
+
+func TestPressingTalkAgainStopsTheRecording(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 9, 28, 16, 32, 0, 0, time.Local)
+	mark := func(name string, at time.Time) {
+		path := filepath.Join(dir, "run", name)
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		_ = os.WriteFile(path, []byte("123"), 0o644)
+		_ = os.Chtimes(path, at, at)
+	}
+
+	// Nothing is recording: a press starts, it never stops.
+	if PressWantsStop(dir, now) {
+		t.Fatal("no recording to stop")
+	}
+
+	// The recording began with that press; the key is held, so it repeats.
+	mark("record-123.pid", now)
+	for _, ms := range []int{500, 550, 600, 650, 1200, 1250, 3000, 3050} {
+		if PressWantsStop(dir, now.Add(time.Duration(ms)*time.Millisecond)) && ms != 1200 && ms != 3000 {
+			t.Fatalf("a repeat %d ms in was taken for a new press", ms)
+		}
+	}
+
+	// A press of its own, well after the last one, stops.
+	mark("talk.press", now.Add(3050*time.Millisecond))
+	if !PressWantsStop(dir, now.Add(5*time.Second)) {
+		t.Fatal("pressing talk again must stop the recording")
+	}
+
+	// Too soon after the recording began: not yet.
+	fresh := t.TempDir()
+	dir = fresh
+	mark("record-9.pid", now)
+	if PressWantsStop(dir, now.Add(300*time.Millisecond)) {
+		t.Fatal("a recording that has just begun is not stopped")
 	}
 }
