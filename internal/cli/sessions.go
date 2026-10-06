@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/fabioaraujo121/pair/internal/config"
+	"github.com/fabioaraujo121/pair/internal/plain"
 	"github.com/fabioaraujo121/pair/internal/session"
 )
 
@@ -43,11 +44,11 @@ func Sessions(w io.Writer) error {
 		} else if s.Name == "" {
 			name = "(unnamed)"
 		}
-		fmt.Fprintf(w, "%s %-15s  %-40s  %-13s  %6s  %7d  %5d\n", mark, s.ID, pad(name, 40), when(s.Started, now), length(s.Length()), s.Prompts, s.Edits)
+		fmt.Fprintf(w, "%s %-15s  %-40s  %-13s  %6s  %7d  %5d\n", mark, s.ID, pad(plain.Line(name), 40), when(s.Started, now), length(s.Length()), s.Prompts, s.Edits)
 	}
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "▶ running   • last one, not running")
-	fmt.Fprintln(w, "pair --continue            continue the last session, with Claude's conversation")
+	fmt.Fprintln(w, "pair --continue            continue the last session, with the agent's conversation")
 	fmt.Fprintln(w, "pair resume <id or name>   open a session again")
 	fmt.Fprintln(w, "pair rename <id or name> <new name>      pair log <id or name>      pair replay <id or name>")
 	return nil

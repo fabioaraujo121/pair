@@ -38,7 +38,7 @@ func startNvim(t *testing.T) (string, func()) {
 		t.Fatal(err)
 	}
 	sock := filepath.Join(dir, "nvim.sock")
-	cmd := exec.Command(nvimBin, "--headless", "--clean", "--cmd", "set rtp^="+pluginDir, "--listen", sock)
+	cmd := exec.Command(nvimBin, "--headless", "--clean", "-n", "--cmd", "set rtp^="+pluginDir, "--listen", sock)
 	cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -212,5 +212,186 @@ func TestDiffIsDrawnInPlace(t *testing.T) {
 	}
 	if err := c.ExecLua(ctx, "return vim.api.nvim_win_get_cursor(0)", &cursor); err != nil || cursor[0] != 3 {
 		t.Fatalf("cursor after cli diff = %v %v", cursor, err)
+	}
+}
+
+// lua runs a chunk and returns what it returns, as a string.
+func lua(t *testing.T, c *Client, code string) string {
+	t.Helper()
+	var out string
+	if err := c.ExecLua(context.Background(), code, &out); err != nil {
+		t.Fatalf("%s: %v", code, err)
+	}
+	return out
+}
+
+const where = `return vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t') .. ':' .. vim.api.nvim_win_get_cursor(0)[1] .. ' ' .. vim.api.nvim_get_mode().mode`
+
+// An engineer who is typing keeps the file and the cursor they have. What
+// Claude does meanwhile is drawn when it is in the file on screen, and
+// never moves anything.
+func TestAnEngineerWhoIsTypingIsNotMoved(t *testing.T) {
+	sock, stop := startNvim(t)
+	defer stop()
+	c := &Client{Addr: sock, Timeout: 3 * time.Second, Transport: "rpc"}
+	ctx := context.Background()
+	dir := t.TempDir()
+	mine, other := filepath.Join(dir, "mine.txt"), filepath.Join(dir, "other.txt")
+	writeLines(t, mine, 30)
+	writeLines(t, other, 30)
+
+	if _, err := c.Show(ctx, mine, 5, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ExecLua(ctx, "vim.cmd('startinsert')", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := lua(t, c, where); got != "mine.txt:5 i" {
+		t.Fatalf("before: %s", got)
+	}
+
+	// Claude points at another file.
+	shown, err := c.Show(ctx, other, 12, 14)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shown.Skipped == "" {
+		t.Fatalf("the call must say the screen was left alone: %+v", shown)
+	}
+	if got := lua(t, c, where); got != "mine.txt:5 i" {
+		t.Fatalf("the engineer was moved while typing: %s", got)
+	}
+	// Claude changes another file.
+	if err := c.Diff(ctx, other, `{"added":[3],"removed":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := lua(t, c, where); got != "mine.txt:5 i" {
+		t.Fatalf("the engineer was moved by a change elsewhere: %s", got)
+	}
+	// Claude points at the file on screen: it is marked, the cursor stays.
+	if shown, err = c.Show(ctx, mine, 20, 22); err != nil || shown.Skipped != "" {
+		t.Fatalf("%+v %v", shown, err)
+	}
+	if got := lua(t, c, where); got != "mine.txt:5 i" {
+		t.Fatalf("the cursor moved: %s", got)
+	}
+	var marks int
+	if err := c.ExecLua(ctx, "local ns = vim.api.nvim_create_namespace('pair'); return #vim.api.nvim_buf_get_extmarks(0, ns, 0, -1, {})", &marks); err != nil || marks != 3 {
+		t.Fatalf("marks in the file on screen: %d %v", marks, err)
+	}
+	if err := c.Diff(ctx, mine, `{"added":[25,26],"removed":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	if got := lua(t, c, where); got != "mine.txt:5 i" {
+		t.Fatalf("the cursor moved to the change: %s", got)
+	}
+
+	// Back in normal mode, everything works as before.
+	if err := c.ExecLua(ctx, "vim.cmd('stopinsert')", nil); err != nil {
+		t.Fatal(err)
+	}
+	if shown, err = c.Show(ctx, other, 12, 14); err != nil || shown.Skipped != "" {
+		t.Fatalf("%+v %v", shown, err)
+	}
+	if got := lua(t, c, where); got != "other.txt:12 n" {
+		t.Fatalf("after typing: %s", got)
+	}
+}
+
+// A message longer than the screen makes Neovim wait for a key, and while
+// it waits nothing pair asks for is done.
+func TestMessagesFitInOneLine(t *testing.T) {
+	sock, stop := startNvim(t)
+	defer stop()
+	c := &Client{Addr: sock, Timeout: 3 * time.Second, Transport: "rpc"}
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), strings.Repeat("deep/", 12), strings.Repeat("long-name-", 8))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "sample.txt")
+	writeLines(t, file, 5)
+
+	if err := c.ExecLua(ctx, `_G.notes = {}; vim.notify = function(m) table.insert(_G.notes, m) end`, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Show(ctx, file, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Unsaved edits, and the file changes on disk.
+	if err := c.ExecLua(ctx, "vim.api.nvim_buf_set_lines(0, 0, 1, false, {'edited locally'})", nil); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond) // the change is seen by its time, in seconds
+	writeLines(t, file, 9)
+	if err := c.Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := lua(t, c, `return #_G.notes .. '|' .. (_G.notes[1] or '') .. '|' .. vim.o.columns`)
+	parts := strings.SplitN(got, "|", 3)
+	if len(parts) != 3 || parts[0] == "0" {
+		t.Fatalf("the engineer must be told about the file left as it was: %q", got)
+	}
+	var columns int
+	fmt.Sscan(parts[2], &columns)
+	if n := len([]rune(parts[1])); n > columns-14 || strings.ContainsAny(parts[1], "\n\r") {
+		t.Fatalf("a message of %d characters on a screen of %d columns: %q", n, columns, parts[1])
+	}
+	if !strings.HasPrefix(parts[1], "pair: ") || !strings.HasSuffix(parts[1], "…") {
+		t.Fatalf("message: %q", parts[1])
+	}
+}
+
+func TestPointUsesTheLinesAsked(t *testing.T) {
+	sock, stop := startNvim(t)
+	defer stop()
+	c := &Client{Addr: sock, Timeout: 3 * time.Second, Transport: "rpc"}
+	ctx := context.Background()
+	file := filepath.Join(t.TempDir(), "sample.txt")
+	writeLines(t, file, 30)
+	if _, err := c.Show(ctx, file, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	// Stand-ins: no question asked, no command run, the arguments kept.
+	setup := `
+		vim.notify = function() end
+		vim.ui.input = function(_, done) done('') end
+		vim.system = function(cmd) _G.ran = table.concat(cmd, ' ', 2); return {} end
+	`
+	if err := c.ExecLua(ctx, setup, nil); err != nil {
+		t.Fatal(err)
+	}
+	asked := func(do string) string {
+		t.Helper()
+		if err := c.ExecLua(ctx, "_G.ran = ''; "+do, nil); err != nil {
+			t.Fatal(err)
+		}
+		return lua(t, c, "return _G.ran")
+	}
+
+	if got := asked("vim.cmd('4,6PairPoint')"); !strings.Contains(got, "--start 4 --end 6") {
+		t.Fatalf(":4,6PairPoint ran %q", got)
+	}
+	// A selection made earlier is not what the engineer points at now.
+	if got := asked("vim.cmd('normal! 10GVjj'); vim.cmd('normal! \\27'); vim.cmd('normal! 20G'); require('pair').point()"); !strings.Contains(got, "--start 20 --end 20") {
+		t.Fatalf("with an old selection, pointing from line 20 ran %q", got)
+	}
+	if got := asked("vim.cmd('PairPoint')"); !strings.Contains(got, "--start 20 --end 20") {
+		t.Fatalf(":PairPoint ran %q", got)
+	}
+}
+
+// Unsaved work must survive a crash, of Neovim or of the machine.
+func TestThePluginKeepsRecoveryFiles(t *testing.T) {
+	_, thisFile, _, _ := runtime.Caller(0)
+	src, err := os.ReadFile(filepath.Join(filepath.Dir(thisFile), "..", "..", "nvim", "lua", "pair", "init.lua"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "swapfile = false") || strings.Contains(string(src), "noswapfile") {
+		t.Fatal("the plugin turns recovery files off")
+	}
+	if !strings.Contains(string(src), "shortmess:append('A')") {
+		t.Fatal("with recovery files on, their prompt must be off: it would block every call")
 	}
 }

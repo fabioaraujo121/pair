@@ -3,30 +3,25 @@ package hook
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/fabioaraujo121/pair/internal/agent"
 )
 
 // Drawing the change in place.
 //
 // After an edit, Neovim shows the change inside the real file: added lines
 // are highlighted, removed lines appear where they used to be. The data
-// comes from Claude Code itself (tool_response.structuredPatch), so it is
-// exactly the edit that was made, whatever git thinks of the file.
+// comes from the agent itself when it reports the change it made (Claude
+// Code's tool_response.structuredPatch), so it is exactly the edit that was
+// made, whatever git thinks of the file; otherwise from git.
 
-// Hunk is one entry of Claude Code's tool_response.structuredPatch; the
-// same shape is produced from a unified diff as a fallback.
-type Hunk struct {
-	OldStart int      `json:"oldStart"`
-	OldLines int      `json:"oldLines"`
-	NewStart int      `json:"newStart"`
-	NewLines int      `json:"newLines"`
-	Lines    []string `json:"lines"`
-}
+// Hunk is one block of a patch, as the agent reports it or as git prints it.
+type Hunk = agent.Hunk
 
 // Removed is a block of deleted lines, drawn above line At of the new file.
 type Removed struct {
@@ -122,20 +117,13 @@ func atoi(s string, def int) int {
 	return def
 }
 
-// marks works out what to draw for an edit: Claude Code's own patch first,
+// marks works out what to draw for an edit: the agent's own patch first,
 // then "everything is new" for a created file, then git.
-func (h *Handler) marks(ctx context.Context, in *Input, file string) Marks {
-	var resp struct {
-		Type            string `json:"type"`
-		StructuredPatch []Hunk `json:"structuredPatch"`
+func (h *Handler) marks(ctx context.Context, f agent.File, file string) Marks {
+	if len(f.Hunks) > 0 {
+		return MarksFromHunks(f.Hunks)
 	}
-	if len(in.ToolResponse) > 0 {
-		_ = json.Unmarshal(in.ToolResponse, &resp)
-	}
-	if len(resp.StructuredPatch) > 0 {
-		return MarksFromHunks(resp.StructuredPatch)
-	}
-	if resp.Type == "create" || (in.ToolName == "Write" && !h.gitTracked(ctx, file)) {
+	if f.Create || (f.Content != "" && !h.gitTracked(ctx, file)) {
 		return allAdded(file)
 	}
 	if out := h.git(ctx, "diff", "--no-color", "-U0", "--", file); len(out) > 0 {

@@ -1,6 +1,6 @@
 # PAIRING.md
 
-Shared scratchpad for this pairing session. Claude writes the plan and open
+Shared scratchpad for this pairing session. The agent writes the plan and open
 questions here before touching code and records every decision after an `ask`.
 The engineer edits it too.
 

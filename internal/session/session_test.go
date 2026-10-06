@@ -33,7 +33,7 @@ func TestNewSessionArchivesThePreviousOne(t *testing.T) {
 {"ts":"2026-09-28T10:20:00-03:00","type":"stop","payload":{"session_id":"claude-1"}}
 `)
 	write(t, filepath.Join(dir, "session.log"), "text log\n")
-	NoteClaude(dir, "claude-1")
+	NoteConversation(dir, "claude-1")
 	NoteTitle(dir, "improve the hero section of the landing page please")
 
 	second, err := New(dir, "", t0.Add(2*time.Hour))
@@ -59,7 +59,7 @@ func TestNewSessionArchivesThePreviousOne(t *testing.T) {
 		t.Fatalf("list: %+v", all)
 	}
 	old := all[1]
-	if old.Name != "landing page" || old.ClaudeSession != "claude-1" || old.Prompts != 1 || old.Edits != 1 {
+	if old.Name != "landing page" || old.Conversation != "claude-1" || old.Prompts != 1 || old.Edits != 1 {
 		t.Fatalf("archived summary: %+v", old)
 	}
 	if old.Title != "improve the hero section of the landing page please" {
@@ -75,7 +75,7 @@ func TestFindRenameRestore(t *testing.T) {
 	t0 := time.Date(2026, 9, 28, 10, 0, 0, 0, brt)
 	a, _ := New(dir, "landing page", t0)
 	write(t, filepath.Join(dir, "events.jsonl"), `{"ts":"2026-09-28T10:00:05-03:00","type":"narrate","payload":{"text":"hello"}}`+"\n")
-	NoteClaude(dir, "claude-a")
+	NoteConversation(dir, "claude-a")
 	b, _ := New(dir, "checkout flow", t0.Add(time.Hour))
 	write(t, filepath.Join(dir, "events.jsonl"), `{"ts":"2026-09-28T11:00:05-03:00","type":"narrate","payload":{"text":"second"}}`+"\n")
 	c, _ := New(dir, "", t0.Add(2*time.Hour))
@@ -112,7 +112,7 @@ func TestFindRenameRestore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.ID != a.ID || m.ClaudeSession != "claude-a" {
+	if m.ID != a.ID || m.Conversation != "claude-a" {
 		t.Fatalf("restored: %+v", m)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
@@ -158,10 +158,10 @@ func TestALogHoldingSeveralSessionsIsSplit(t *testing.T) {
 	if !all[0].Current || all[0].ID != m.ID {
 		t.Fatalf("current: %+v", all[0])
 	}
-	if all[1].ClaudeSession != "claude-new" || !strings.HasPrefix(all[1].Title, "So we were investigating") {
+	if all[1].Conversation != "claude-new" || !strings.HasPrefix(all[1].Title, "So we were investigating") {
 		t.Fatalf("newest past session: %+v", all[1].Meta)
 	}
-	if all[2].ClaudeSession != "claude-old" || all[2].Narrations != 1 {
+	if all[2].Conversation != "claude-old" || all[2].Narrations != 1 {
 		t.Fatalf("oldest past session: %+v", all[2])
 	}
 	if _, err := os.Stat(filepath.Join(dir, "events.jsonl")); err == nil {

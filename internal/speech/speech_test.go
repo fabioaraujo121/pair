@@ -105,14 +105,14 @@ func TestOnlyTheSessionsOwnSpeechIsSilenced(t *testing.T) {
 	done := make(chan result, 2)
 	for who, dir := range map[string]string{"mine": mine, "other": other} {
 		go func() {
-			done <- result{who, (&Say{Bin: bin, StateDir: dir}).Speak(context.Background(), "a long sentence")}
+			done <- result{who, (&Say{Bin: bin, RunDir: dir}).Speak(context.Background(), "a long sentence")}
 		}()
 	}
 	// Wait until both are tracked, then silence one session.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		a, _ := filepath.Glob(filepath.Join(mine, "run", "speech-*.pid"))
-		b, _ := filepath.Glob(filepath.Join(other, "run", "speech-*.pid"))
+		a, _ := filepath.Glob(filepath.Join(mine, "speech-*.pid"))
+		b, _ := filepath.Glob(filepath.Join(other, "speech-*.pid"))
 		if len(a) == 1 && len(b) == 1 {
 			break
 		}
@@ -137,7 +137,7 @@ func TestOnlyTheSessionsOwnSpeechIsSilenced(t *testing.T) {
 	}
 	KillSpeech(other) // end the test promptly
 	<-done
-	if left, _ := filepath.Glob(filepath.Join(mine, "run", "*.pid")); len(left) != 0 {
+	if left, _ := filepath.Glob(filepath.Join(mine, "*.pid")); len(left) != 0 {
 		t.Fatalf("pid files left: %v", left)
 	}
 }
@@ -146,7 +146,7 @@ func TestPressingTalkAgainStopsTheRecording(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 9, 28, 16, 32, 0, 0, time.Local)
 	mark := func(name string, at time.Time) {
-		path := filepath.Join(dir, "run", name)
+		path := filepath.Join(dir, name)
 		_ = os.MkdirAll(filepath.Dir(path), 0o755)
 		_ = os.WriteFile(path, []byte("123"), 0o644)
 		_ = os.Chtimes(path, at, at)

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/nvim"
 	"github.com/fabioaraujo121/pair/internal/speech"
@@ -46,7 +47,8 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 		checks = append(checks, check{name, required, true, path})
 		return true
 	}
-	bin("claude", true, "the agent")
+	ag, _ := agent.For(cfg.Agent)
+	bin(ag.Binary(), true, "the agent, "+ag.Title())
 	bin("tmux", true, "layout")
 	bin("git", true, "diffs")
 	bin("say", true, "text to speech")
@@ -112,15 +114,10 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 		checks = append(checks, check{"tmux session", false, true, fmt.Sprintf("%q not running (start with `pair`)", cfg.Session)})
 	}
 
-	if claude, err := exec.LookPath("claude"); err == nil {
-		get := claudeCmd(claude, "mcp", "get", "pair")
-		get.Dir = cfg.Root
-		if out, err := get.CombinedOutput(); err == nil {
-			first := strings.SplitN(strings.TrimSpace(string(out)), "\n", 2)[0]
-			checks = append(checks, check{"mcp server", false, true, first})
-		} else {
-			checks = append(checks, check{"mcp server", false, false, "\"pair\" not registered for this project (run `pair init`)"})
-		}
+	if ok, why := ag.Registered(cfg.Root); ok {
+		checks = append(checks, check{"mcp server", false, true, "\"pair\" registered for this project with " + ag.Title()})
+	} else {
+		checks = append(checks, check{"mcp server", false, false, "\"pair\" not registered for this project: " + why})
 	}
 
 	if v := os.Getenv("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS"); v != "" && v != "0" {

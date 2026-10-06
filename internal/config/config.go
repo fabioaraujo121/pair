@@ -8,9 +8,12 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/fabioaraujo121/pair/internal/agent"
 )
 
 const (
@@ -38,6 +41,7 @@ type Config struct {
 	Root     string // repository root (directory containing .git) or the cwd
 	StateDir string // <Root>/.pair
 	UserDir  string // ~/.pair
+	RunDir   string // ~/.pair/run/<session>: pids of the processes that speak and record
 
 	Session      string
 	Sock         string
@@ -51,6 +55,7 @@ type Config struct {
 	SilenceSecs  string
 	SilenceLevel string
 	LogWidth     string  // PAIR_LOG_WIDTH
+	Agent        string  // PAIR_AGENT: the coding agent, "claude" or "codex"; from the environment or ~/.pair/config only
 	ClaudeHeight string  // PAIR_CLAUDE_HEIGHT
 	ClaudeShown  bool    // PAIR_CLAUDE=shown starts with Claude's pane open
 	ClaudeArgs   string  // PAIR_CLAUDE_ARGS: extra arguments for the claude command
@@ -82,7 +87,7 @@ func Load(cwd string) Config {
 	userDir := filepath.Join(home, ".pair")
 	stateDir := filepath.Join(root, ".pair")
 	files := []map[string]string{
-		readFile(filepath.Join(stateDir, "config")),
+		repoOnly(readFile(filepath.Join(stateDir, "config"))),
 		readFile(filepath.Join(userDir, "config")),
 	}
 	str := func(name, def string) string {
@@ -96,17 +101,27 @@ func Load(cwd string) Config {
 		}
 		return def
 	}
+	session := str("PAIR_SESSION", "")
+	if !validName.MatchString(session) {
+		session = SessionFor(root)
+	}
 	num := func(name string, def int) int {
 		if n, err := strconv.Atoi(str(name, "")); err == nil {
 			return n
 		}
 		return def
 	}
+	agentName := strings.ToLower(str("PAIR_AGENT", agent.Default))
+	if !agent.Known(agentName) {
+		agentName = agent.Default
+	}
 	return Config{
+		Agent:        agentName,
 		Root:         root,
 		StateDir:     stateDir,
 		UserDir:      userDir,
-		Session:      str("PAIR_SESSION", SessionFor(root)),
+		RunDir:       filepath.Join(userDir, "run", session),
+		Session:      session,
 		Sock:         str("PAIR_SOCK", DefaultSock(root)),
 		HighlightTTL: num("PAIR_HIGHLIGHT_TTL", DefaultHighlightTTL),
 		DiffLimit:    num("PAIR_DIFF_LIMIT", DefaultDiffLimit),
@@ -147,6 +162,36 @@ func float(s string, def float64) float64 {
 // any other way in the same repository must not write to the session.
 func Active() bool { return os.Getenv("PAIR_ACTIVE") != "" }
 
+// A repository can be someone else's. Its .pair/config may set how the
+// session sounds and looks; it may not set what is run, where files are
+// written, or whether the microphone opens by itself. Those come from the
+// environment and from ~/.pair/config only.
+var repoSettings = map[string]bool{
+	"PAIR_LANG": true, "PAIR_VOICE": true, "PAIR_RATE": true,
+	"PAIR_KOKORO_VOICE": true, "PAIR_KOKORO_SPEED": true,
+	"PAIR_HIGHLIGHT_TTL": true, "PAIR_DIFF_LIMIT": true,
+	"PAIR_SILENCE_SECS": true, "PAIR_SILENCE_LEVEL": true,
+	"PAIR_ASK_MAX": true, "PAIR_ASK_WAIT": true,
+	"PAIR_CUE": true, "PAIR_CUE_IDLE": true,
+	"PAIR_LOG_WIDTH": true, "PAIR_CLAUDE_HEIGHT": true, "PAIR_PRESENCE_HEIGHT": true,
+	"PAIR_CLAUDE": true,
+}
+
+// repoOnly keeps the settings a repository is allowed to carry.
+func repoOnly(all map[string]string) map[string]string {
+	kept := map[string]string{}
+	for k, v := range all {
+		if repoSettings[k] {
+			kept[k] = v
+		}
+	}
+	return kept
+}
+
+// validName is what a tmux session name may be: it ends up in tmux targets
+// and in a command line run by a key binding.
+var validName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 // UserConfigPath is the per-user settings file.
 func UserConfigPath() string {
 	home, _ := os.UserHomeDir()
@@ -170,9 +215,18 @@ func readFile(path string) map[string]string {
 		if !ok {
 			continue
 		}
-		out[strings.TrimSpace(k)] = strings.Trim(strings.TrimSpace(v), `"'`)
+		out[strings.TrimSpace(k)] = unquote(strings.TrimSpace(v))
 	}
 	return out
+}
+
+// unquote removes one pair of quotes around a value. Quotes inside the
+// value, or a lone one at either end, belong to it.
+func unquote(v string) string {
+	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // SaveUser merges values into ~/.pair/config, keeping comments and the

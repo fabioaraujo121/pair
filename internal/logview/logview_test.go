@@ -119,3 +119,37 @@ func TestOldLogsWithoutQuestionEvents(t *testing.T) {
 		}
 	}
 }
+
+// What is shown in the activity pane was said, written or named by
+// someone: a transcript, a narration, a file. It is printed as text, so it
+// cannot clear the screen, move the cursor or rename the terminal.
+func TestWhatIsPrintedCannotDriveTheTerminal(t *testing.T) {
+	pinZone(t)
+	var out bytes.Buffer
+	p := &Printer{W: &out, Width: 60, Color: true}
+	p.Print(Entry{
+		Time:    time.Date(2026, 9, 28, 16, 0, 0, 0, time.Local),
+		Speaker: "claude",
+		Text:    "first line\x1b[2J\x1b[H\nsecond\x1b]0;owned\x07 line\x9b31m \x00end\r\n",
+		Card:    "app/\x1b[31mred\x1b[0m.rb\nnext",
+	})
+	got := out.String()
+	for _, bad := range []string{"\x1b[2J", "\x1b[H", "\x1b]0;", "\x07", "\x00", "\x9b", "\x1b[31mred"} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("%q reached the terminal:\n%q", bad, got)
+		}
+	}
+	for _, want := range []string{"first line", "second", "end", "red", "next"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("the text itself must be kept, %q is missing:\n%q", want, got)
+		}
+	}
+	if Clean("a\nb\tc", true) != "a\nb c" || Clean("a\nb", false) != "a b" {
+		t.Fatalf("line breaks: %q %q", Clean("a\nb\tc", true), Clean("a\nb", false))
+	}
+
+	// The colours the viewer itself adds are still there.
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("the viewer lost its own colours:\n%q", got)
+	}
+}

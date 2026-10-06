@@ -11,10 +11,12 @@ package status
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
@@ -34,6 +36,8 @@ type Status struct {
 
 	Mic    bool   `json:"mic,omitempty"`    // the microphone is open
 	Behind *Shown `json:"behind,omitempty"` // reported while it was open, shown when it closes
+
+	Agent string `json:"agent,omitempty"` // the agent's name in a sentence: "Claude", "Codex"
 }
 
 const file = "status.json"
@@ -57,9 +61,10 @@ func save(stateDir string, st Status) {
 	if err != nil {
 		return
 	}
-	_ = os.MkdirAll(stateDir, 0o755)
-	tmp := filepath.Join(stateDir, file+".tmp")
-	if os.WriteFile(tmp, data, 0o644) == nil {
+	_ = os.MkdirAll(stateDir, 0o700)
+	// A name of its own: several hooks write the status at the same moment.
+	tmp := filepath.Join(stateDir, fmt.Sprintf("%s.%d.tmp", file, os.Getpid()))
+	if os.WriteFile(tmp, data, 0o600) == nil {
 		_ = os.Rename(tmp, filepath.Join(stateDir, file))
 	}
 }
@@ -103,8 +108,17 @@ func ListeningDone(cfg config.Config, state, detail string) {
 	write(cfg, next.State, next.Detail, false)
 }
 
+// Who is the agent's name in a sentence, for the labels.
+func Who(cfg config.Config) string {
+	if a, err := agent.For(cfg.Agent); err == nil {
+		return a.Short()
+	}
+	return "Claude"
+}
+
 func write(cfg config.Config, state, detail string, newTurn bool) {
 	now := time.Now()
+	who := Who(cfg)
 	if cfg.StateDir != "" {
 		prev := Read(cfg.StateDir)
 		if state != tmux.StateListening && micOpen(cfg, prev, now) {
@@ -115,7 +129,7 @@ func write(cfg config.Config, state, detail string, newTurn bool) {
 			save(cfg.StateDir, prev)
 			return // the display stays on listening
 		}
-		st := Status{State: state, Detail: detail, Since: now, Turn: prev.Turn, Mic: state == tmux.StateListening}
+		st := Status{State: state, Detail: detail, Since: now, Turn: prev.Turn, Mic: state == tmux.StateListening, Agent: who}
 		if prev.State == state && !prev.Since.IsZero() {
 			st.Since = prev.Since
 		}
@@ -129,23 +143,26 @@ func write(cfg config.Config, state, detail string, newTurn bool) {
 		}
 		save(cfg.StateDir, st)
 	}
-	tmux.SetState(cfg.Session, state, detail)
+	tmux.SetState(cfg.Session, state, detail, who)
 }
 
-// Label is the plain sentence for a state.
-func Label(state string) string {
+// Label is the plain sentence for a state. who is the agent's name.
+func Label(state, who string) string {
+	if who == "" {
+		who = "Claude"
+	}
 	switch state {
 	case tmux.StateIdle:
 		return "your turn"
 	case tmux.StateSpeaking:
-		return "Claude is speaking"
+		return who + " is speaking"
 	case tmux.StateAsking:
-		return "Claude is asking you"
+		return who + " is asking you"
 	case tmux.StateListening:
 		return "listening"
 	case tmux.StateAttention:
-		return "Claude needs you"
+		return who + " needs you"
 	default:
-		return "Claude is working"
+		return who + " is working"
 	}
 }

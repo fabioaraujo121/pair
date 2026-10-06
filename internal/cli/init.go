@@ -3,20 +3,21 @@ package cli
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	pair "github.com/fabioaraujo121/pair"
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 )
 
-// Init prepares the current repository for pairing: hooks and permissions in
-// .claude/settings.json, the pairing-mode block in CLAUDE.md, the MCP server
-// registration, a PAIRING.md scratchpad, .gitignore entries, and the Neovim
-// plugin under ~/.pair/nvim. Re-running it is safe.
+// Init prepares the current repository for pairing: the agent's hooks,
+// instructions and MCP server registration, a PAIRING.md scratchpad,
+// .gitignore entries, and the Neovim plugin under ~/.pair/nvim. Re-running
+// it is safe.
 func Init(args []string) error {
 	settings := map[string]string{}
+	agentName := ""
 	for i := 0; i < len(args); i++ {
 		value := func() string {
 			if i+1 < len(args) {
@@ -32,8 +33,14 @@ func Init(args []string) error {
 			settings["PAIR_VOICE"] = value()
 		case "--rate":
 			settings["PAIR_RATE"] = value()
+		case "--agent":
+			agentName = value()
+			if !agent.Known(agentName) {
+				return fmt.Errorf("unknown agent %q (one of %s)", agentName, strings.Join(agent.Names(), ", "))
+			}
+			settings["PAIR_AGENT"] = agentName
 		default:
-			return fmt.Errorf("unknown option %q (usage: pair init [--lang en] [--voice Samantha] [--rate 190])", args[i])
+			return fmt.Errorf("unknown option %q (usage: pair init [--agent claude|codex] [--lang en] [--voice Samantha] [--rate 190])", args[i])
 		}
 	}
 	for k, v := range settings {
@@ -48,6 +55,14 @@ func Init(args []string) error {
 		fmt.Printf("✓ %s updated\n", config.UserConfigPath())
 	}
 	cfg := config.Load("")
+	if agentName != "" {
+		cfg.Agent = agentName
+	}
+	ag, err := agent.For(cfg.Agent)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("• pairing with %s (change with `pair init --agent %s`)\n", ag.Title(), otherAgent(ag.Name()))
 	fmt.Printf("• speaking %s with voice %s at %d wpm (change with `pair init --lang pt --voice Luciana`)\n", cfg.Lang, cfg.Voice, cfg.Rate)
 	exe, err := os.Executable()
 	if err != nil {
@@ -57,36 +72,8 @@ func Init(args []string) error {
 		exe = resolved
 	}
 
-	settingsPath := filepath.Join(cfg.Root, ".claude", "settings.json")
-	existing, _ := os.ReadFile(settingsPath)
-	merged, err := MergeSettings(existing, exe)
-	if err != nil {
+	if err := ag.Install(agent.Install{Root: cfg.Root, Exe: exe, Lang: cfg.Lang, AskTimeout: cfg.AskWait + cfg.AskMax + 120}, os.Stdout); err != nil {
 		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(settingsPath, merged, 0o644); err != nil {
-		return err
-	}
-	fmt.Println("✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop, Notification) and MCP permissions")
-
-	claudeMD := filepath.Join(cfg.Root, "CLAUDE.md")
-	current, _ := os.ReadFile(claudeMD)
-	updated := UpsertBlock(string(current), PairingBlock(cfg.Lang))
-	if updated != string(current) {
-		if err := os.WriteFile(claudeMD, []byte(updated), 0o644); err != nil {
-			return err
-		}
-		fmt.Printf("✓ CLAUDE.md: pairing-mode block (%s) between %s markers\n", cfg.Lang, blockStart)
-	} else {
-		fmt.Println("• CLAUDE.md: pairing-mode block already up to date")
-	}
-
-	if err := registerMCP(exe, cfg.Root); err != nil {
-		fmt.Printf("! MCP server not registered: %v\n  register by hand: claude mcp add pair -- %s mcp --root %s\n", err, exe, cfg.Root)
-	} else {
-		fmt.Println("✓ MCP server \"pair\" registered for this project (claude mcp add, local scope)")
 	}
 
 	scratch := filepath.Join(cfg.Root, "PAIRING.md")
@@ -139,48 +126,14 @@ Next: run `+"`pair`"+` to start a session. In the session: F5 to talk, F6 to int
 	return nil
 }
 
-// registerMCP records the server in Claude Code's local scope for this
-// project with the absolute binary path, replacing any earlier entry.
-func registerMCP(exe, root string) error {
-	claude, err := exec.LookPath("claude")
-	if err != nil {
-		return err
-	}
-	remove := claudeCmd(claude, "mcp", "remove", "--scope", "local", "pair")
-	remove.Dir = root
-	_ = remove.Run() // absent is fine
-	add := claudeCmd(claude, "mcp", "add", "--scope", "local", "--transport", "stdio", "pair", "--", exe, "mcp", "--root", root)
-	add.Dir = root
-	if out, err := add.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// claudeCmd builds a `claude` subcommand. It goes through the user's
-// interactive shell so a wrapper function or alias around `claude` (for
-// example one that selects a per-folder account) applies, exactly as if
-// the user had typed the command. It also works when pair itself runs
-// inside a Claude Code session.
-func claudeCmd(claude string, args ...string) *exec.Cmd {
-	var cmd *exec.Cmd
-	shell := os.Getenv("SHELL")
-	if base := filepath.Base(shell); base == "zsh" || base == "bash" {
-		quoted := make([]string, 0, len(args)+1)
-		quoted = append(quoted, "claude")
-		for _, a := range args {
-			quoted = append(quoted, shellQuote(a))
-		}
-		cmd = exec.Command(shell, "-ic", strings.Join(quoted, " "))
-	} else {
-		cmd = exec.Command(claude, args...)
-	}
-	for _, kv := range os.Environ() {
-		if !strings.HasPrefix(kv, "CLAUDECODE=") {
-			cmd.Env = append(cmd.Env, kv)
+// otherAgent names an agent that is not this one, for the hint.
+func otherAgent(name string) string {
+	for _, n := range agent.Names() {
+		if n != name {
+			return n
 		}
 	}
-	return cmd
+	return name
 }
 
 // ensureGitignore appends the given patterns when they are missing and

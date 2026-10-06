@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/session"
 	"github.com/fabioaraujo121/pair/internal/tmux"
@@ -57,7 +59,11 @@ func saveState(dir string, st State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, stateFile), data, 0o644)
+	tmp := filepath.Join(dir, fmt.Sprintf("%s.%d.tmp", stateFile, os.Getpid()))
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, stateFile))
 }
 
 // ResetState forgets all snapshots; `pair start` calls it so a session
@@ -77,21 +83,101 @@ func hashBytes(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// Snapshot records file's current content as "seen by Claude".
-func Snapshot(dir string, st *State, file string) {
-	data, err := os.ReadFile(file)
+// identity returns what tells one content of a file from another: a hash
+// of it, or, for a file too large to read at every prompt, its size and
+// the time it was last written.
+func identity(file string) (id string, data []byte, large bool, err error) {
+	fi, err := os.Stat(file)
+	if err != nil {
+		return "", nil, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return "", nil, false, errors.New("not a regular file")
+	}
+	if fi.Size() > maxSnap {
+		return fmt.Sprintf("large:%d:%d", fi.Size(), fi.ModTime().UnixNano()), nil, true, nil
+	}
+	if data, err = os.ReadFile(file); err != nil {
+		return "", nil, false, err
+	}
+	return hashBytes(data), data, false, nil
+}
+
+// Snapshot records file's current content as "seen by Claude". With
+// withheld, only the fact that it was seen is kept, not a copy of it.
+func Snapshot(dir string, st *State, file string, withheld bool) {
+	id, data, large, err := identity(file)
 	if err != nil {
 		delete(st.Files, file)
 		_ = os.Remove(snapPath(dir, file))
 		return
 	}
-	st.Files[file] = hashBytes(data)
-	if len(data) > maxSnap {
+	st.Files[file] = id
+	if large || withheld {
 		_ = os.Remove(snapPath(dir, file))
 		return
 	}
-	_ = os.MkdirAll(filepath.Join(dir, snapDir), 0o755)
-	_ = os.WriteFile(snapPath(dir, file), data, 0o644)
+	_ = os.MkdirAll(filepath.Join(dir, snapDir), 0o700)
+	_ = os.WriteFile(snapPath(dir, file), data, 0o600)
+}
+
+// secretName reports whether a file, by its name, is likely to hold
+// secrets. Its changes are reported by name, never by content.
+func secretName(file string) bool {
+	base := strings.ToLower(filepath.Base(file))
+	switch base {
+	case "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "master.key", ".npmrc", ".netrc", ".pgpass", "credentials":
+		return true
+	}
+	if strings.HasPrefix(base, ".env") {
+		return true
+	}
+	for _, ext := range []string{".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"} {
+		if strings.HasSuffix(base, ext) {
+			return true
+		}
+	}
+	for _, word := range []string{"credentials", "secret"} {
+		if strings.Contains(base, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// withheld reports whether the content of a file must stay out of the
+// model's context and out of the snapshots: a likely secret, or a file the
+// repository ignores. The scratchpad is ignored by choice and is the
+// exception.
+func (h *Handler) withheld(ctx context.Context, file string) bool {
+	if filepath.Clean(file) == filepath.Join(h.Cfg.Root, "PAIRING.md") {
+		return false
+	}
+	if secretName(file) {
+		return true
+	}
+	err := exec.CommandContext(ctx, "git", "-C", h.Cfg.Root, "check-ignore", "-q", "--", file).Run()
+	return err == nil // exit 0: ignored
+}
+
+// inside reports whether path is in the repository and not in pair's own
+// directory, following links: what is listed in the state file, or a
+// link in the working tree, must not lead anywhere else.
+func (h *Handler) inside(path string) bool {
+	root := h.Cfg.Root
+	if r, err := filepath.EvalSymlinks(root); err == nil {
+		root = r
+	}
+	if p, err := filepath.EvalSymlinks(path); err == nil {
+		path = p
+	} else if p, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+		path = filepath.Join(p, filepath.Base(path)) // a file that is gone: judge by its directory
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return rel != ".pair" && !strings.HasPrefix(rel, ".pair"+string(filepath.Separator))
 }
 
 // Change is one file that differs from what Claude last saw.
@@ -102,24 +188,29 @@ type Change struct {
 	Note  string // "deleted", "new file", "too large"
 }
 
-// Prompt is the UserPromptSubmit hook: it prints hookSpecificOutput with
-// the engineer's changes, or nothing.
-func (h *Handler) Prompt(in *Input) error {
+// Prompt is the hook at a prompt: it prints what the agent reads as added
+// context, with the engineer's changes, or nothing.
+func (h *Handler) Prompt(ev *agent.Event) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	h.startTurn()
-	session.NoteTitle(h.Cfg.StateDir, in.Prompt)
-	_ = h.Log.Session("› " + oneLine(in.Prompt, 120))
+	session.NoteTitle(h.Cfg.StateDir, ev.Prompt)
+	_ = h.Log.Session("› " + oneLine(ev.Prompt, 120))
 	st := loadState(h.Cfg.StateDir)
+	for f := range st.Files {
+		if !h.inside(f) {
+			delete(st.Files, f) // not written by pair: forget it
+		}
+	}
 	candidates := h.candidates(ctx, st)
 
 	if !st.Baselined {
 		for _, f := range candidates {
-			Snapshot(h.Cfg.StateDir, &st, f)
+			Snapshot(h.Cfg.StateDir, &st, f, h.withheld(ctx, f))
 		}
 		st.Baselined = true
 		_ = saveState(h.Cfg.StateDir, st)
-		_ = h.Log.Append("prompt", map[string]any{"baselined": len(candidates), "chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
+		_ = h.Log.Append("prompt", map[string]any{"baselined": len(candidates), "chars": len(ev.Prompt), "text": oneLine(ev.Prompt, 600)})
 		return nil
 	}
 
@@ -131,7 +222,7 @@ func (h *Handler) Prompt(in *Input) error {
 	}
 	_ = saveState(h.Cfg.StateDir, st)
 	if len(changes) == 0 {
-		_ = h.Log.Append("prompt", map[string]any{"chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
+		_ = h.Log.Append("prompt", map[string]any{"chars": len(ev.Prompt), "text": oneLine(ev.Prompt, 600)})
 		return nil
 	}
 
@@ -140,18 +231,15 @@ func (h *Handler) Prompt(in *Input) error {
 	for i, c := range changes {
 		names[i] = c.Path
 	}
-	_ = h.Log.Append("prompt", map[string]any{"changes": names, "truncated": truncated, "chars": len(in.Prompt), "text": oneLine(in.Prompt, 600)})
+	_ = h.Log.Append("prompt", map[string]any{"changes": names, "truncated": truncated, "chars": len(ev.Prompt), "text": oneLine(ev.Prompt, 600)})
 	_ = h.Log.Session("✎ engineer changed: " + strings.Join(names, ", "))
 
-	out := map[string]any{
-		"hookSpecificOutput": map[string]any{
-			"hookEventName":     "UserPromptSubmit",
-			"additionalContext": text,
-		},
+	ag := h.Agent
+	if ag == nil {
+		ag = agent.Claude{}
 	}
-	enc := json.NewEncoder(h.Stdout)
-	enc.SetEscapeHTML(false)
-	return enc.Encode(out)
+	_, err := h.Stdout.Write(ag.ContextOutput("prompt", text))
+	return err
 }
 
 // candidates lists files worth checking: everything git reports as
@@ -161,25 +249,20 @@ func (h *Handler) candidates(ctx context.Context, st State) []string {
 	var files []string
 	add := func(p string) {
 		p = filepath.Clean(p)
-		if !seen[p] {
+		if !seen[p] && h.inside(p) {
 			seen[p] = true
 			files = append(files, p)
 		}
 	}
-	out, err := exec.CommandContext(ctx, "git", "-C", h.Cfg.Root, "status", "--porcelain", "--untracked-files=all", "--no-renames").Output()
+	// -z: names as they are, separated by NUL. Without it git quotes and
+	// escapes any name that is not plain ASCII.
+	out, err := exec.CommandContext(ctx, "git", "-C", h.Cfg.Root, "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames").Output()
 	if err == nil {
-		for _, line := range strings.Split(string(out), "\n") {
-			if len(line) < 4 {
+		for _, entry := range strings.Split(string(out), "\x00") {
+			if len(entry) < 4 {
 				continue
 			}
-			rel := strings.TrimSpace(line[3:])
-			if strings.HasPrefix(rel, "\"") { // quoted path with special chars
-				rel = strings.Trim(rel, "\"")
-			}
-			if rel == "" || strings.HasPrefix(rel, ".pair/") {
-				continue
-			}
-			add(filepath.Join(h.Cfg.Root, rel))
+			add(filepath.Join(h.Cfg.Root, entry[3:]))
 		}
 	}
 	for f := range st.Files {
@@ -195,29 +278,31 @@ func (h *Handler) candidates(ctx context.Context, st State) []string {
 func (h *Handler) detectChange(ctx context.Context, st *State, file string) (Change, bool) {
 	rel := h.rel(file)
 	known, wasKnown := st.Files[file]
-	data, readErr := os.ReadFile(file)
-
-	if readErr != nil {
+	id, _, large, err := identity(file)
+	if err != nil {
 		if !wasKnown {
 			return Change{}, false // never existed as far as Claude knows
 		}
-		Snapshot(h.Cfg.StateDir, st, file)
+		Snapshot(h.Cfg.StateDir, st, file, true)
 		return Change{Path: rel, Note: "deleted"}, true
 	}
-	cur := hashBytes(data)
-	if wasKnown && cur == known {
+	if wasKnown && id == known {
 		return Change{}, false
 	}
+	withheld := h.withheld(ctx, file)
 	if !wasKnown && !h.gitDirty(ctx, file) {
 		// Clean in git and never touched: Claude can read it itself.
-		Snapshot(h.Cfg.StateDir, st, file)
+		Snapshot(h.Cfg.StateDir, st, file, withheld)
 		return Change{}, false
 	}
 
 	var diff []byte
 	switch {
-	case len(data) > maxSnap:
-		Snapshot(h.Cfg.StateDir, st, file)
+	case withheld:
+		Snapshot(h.Cfg.StateDir, st, file, true)
+		return Change{Path: rel, Note: "changed; contents withheld: it looks like a secret, or the repository ignores it"}, true
+	case large:
+		Snapshot(h.Cfg.StateDir, st, file, false)
 		return Change{Path: rel, Note: "too large to inline"}, true
 	case wasKnown && fileExists(snapPath(h.Cfg.StateDir, file)):
 		diff = h.git(ctx, "diff", "--no-color", "--no-index", "--", snapPath(h.Cfg.StateDir, file), file)
@@ -226,7 +311,7 @@ func (h *Handler) detectChange(ctx context.Context, st *State, file string) (Cha
 	default:
 		diff = h.git(ctx, "diff", "--no-color", "--no-index", "--", "/dev/null", file)
 	}
-	Snapshot(h.Cfg.StateDir, st, file)
+	Snapshot(h.Cfg.StateDir, st, file, false)
 	body := trimDiffHeader(string(diff), rel)
 	c := Change{Path: rel, Diff: body, Lines: strings.Count(body, "\n")}
 	if body == "" {
@@ -253,20 +338,21 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// trimDiffHeader drops the "diff --git/index/---/+++" preamble and keeps
-// hunks, so snapshot paths never leak into the context.
+// trimDiffHeader drops what git prints before the first hunk, where the
+// paths of the two sides are, so snapshot paths never reach the context.
+// From the first hunk on, every line is content and is kept: a removed
+// line that reads "-- a comment" arrives as "--- a comment".
 func trimDiffHeader(diff, rel string) string {
-	var hunks []string
-	for _, line := range strings.Split(diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git"), strings.HasPrefix(line, "index "),
-			strings.HasPrefix(line, "--- "), strings.HasPrefix(line, "+++ "),
-			strings.HasPrefix(line, "new file mode"), strings.HasPrefix(line, "deleted file mode"):
-			continue
-		}
-		hunks = append(hunks, line)
+	start := strings.Index(diff, "\n@@")
+	switch {
+	case strings.HasPrefix(diff, "@@"):
+		start = 0
+	case start >= 0:
+		start++
+	default:
+		return "" // no hunk: a binary file, or only a change of mode
 	}
-	body := strings.TrimSpace(strings.Join(hunks, "\n"))
+	body := strings.TrimRight(diff[start:], "\n")
 	if body == "" {
 		return ""
 	}
@@ -363,7 +449,8 @@ func Point(args []string, out io.Writer) error {
 	_ = log.Append("point", map[string]any{"file": file, "start": start, "end": end, "note": note})
 	_ = log.Session("👉 " + ref + " " + note)
 	if tmux.HasSession(cfg.Session) {
-		if err := tmux.SendText(cfg.Session, text, note != ""); err != nil {
+		ag, _ := agent.For(cfg.Agent)
+		if err := tmux.SendText(cfg.Session, text, note != "", ag.SubmitDelay()); err != nil {
 			return err
 		}
 	}

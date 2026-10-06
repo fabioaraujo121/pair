@@ -38,6 +38,9 @@ type Shown struct {
 	File  string `msgpack:"file" json:"file"`
 	Start int    `msgpack:"start" json:"start"`
 	End   int    `msgpack:"end" json:"end"`
+	// Skipped says why the screen was left as it was: the engineer was
+	// typing in another file.
+	Skipped string `msgpack:"skipped" json:"skipped,omitempty"`
 }
 
 // Show jumps to file (absolute path) at line start and highlights

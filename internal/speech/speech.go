@@ -46,10 +46,10 @@ type Warmer interface {
 
 // Say speaks through macOS `say`.
 type Say struct {
-	Voice    string
-	Rate     int
-	Bin      string // defaults to "say" on PATH
-	StateDir string // the session's state directory, to track the process
+	Voice  string
+	Rate   int
+	Bin    string // defaults to "say" on PATH
+	RunDir string // the session's run directory, to track the process
 }
 
 // NewSay returns a Say speaker for the given voice and words-per-minute rate.
@@ -80,7 +80,7 @@ func (s *Say) Speak(ctx context.Context, text string) error {
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = time.Second
-	if err := runTracked(cmd, s.StateDir, trackSpeech); err != nil {
+	if err := runTracked(cmd, s.RunDir, trackSpeech); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}

@@ -1,4 +1,4 @@
-package cli
+package agent
 
 import (
 	"encoding/json"
@@ -16,11 +16,11 @@ func decode(t *testing.T, b []byte) map[string]any {
 }
 
 func TestMergeSettingsFromScratchIsIdempotent(t *testing.T) {
-	first, err := MergeSettings(nil, "/opt/homebrew/bin/pair")
+	first, err := MergeClaudeSettings(nil, "/opt/homebrew/bin/pair")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := MergeSettings(first, "/opt/homebrew/bin/pair")
+	second, err := MergeClaudeSettings(first, "/opt/homebrew/bin/pair")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestMergeSettingsFromScratchIsIdempotent(t *testing.T) {
 		t.Fatalf("matcher = %v", g["matcher"])
 	}
 	cmd := g["hooks"].([]any)[0].(map[string]any)["command"]
-	if cmd != "/opt/homebrew/bin/pair hook pre_edit" {
+	if cmd != "/opt/homebrew/bin/pair hook pre_edit --agent claude" {
 		t.Fatalf("command = %v", cmd)
 	}
 	if _, has := hooks["Stop"].([]any)[0].(map[string]any)["matcher"]; has {
@@ -60,12 +60,12 @@ func TestMergeSettingsPreservesOtherHooksAndReplacesOurs(t *testing.T) {
     "PreToolUse": [
       {"matcher": "Bash", "hooks": [{"type": "command", "command": "echo audit"}]},
       {"matcher": "Edit|MultiEdit|Write", "hooks": [{"type": "command", "command": "/old/path/pair hook pre_edit"}]},
-      {"matcher": "Write", "hooks": [{"type": "command", "command": "'/Applications/My Tools/pair' hook pre_edit"}, {"type": "command", "command": "lint"}]}
+      {"matcher": "Write", "hooks": [{"type": "command", "command": "'/Applications/My Tools/pair' hook pre_edit --agent claude"}, {"type": "command", "command": "lint"}]}
     ]
   },
   "model": "opus"
 }`
-	out, err := MergeSettings([]byte(existing), "/new/pair")
+	out, err := MergeClaudeSettings([]byte(existing), "/new/pair")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestMergeSettingsPreservesOtherHooksAndReplacesOurs(t *testing.T) {
 	if strings.Count(string(out), "hook pre_edit") != 1 {
 		t.Fatalf("exactly one pre_edit hook expected:\n%s", out)
 	}
-	if _, err := MergeSettings([]byte("{oops"), "/new/pair"); err == nil {
+	if _, err := MergeClaudeSettings([]byte("{oops"), "/new/pair"); err == nil {
 		t.Fatal("invalid existing JSON must be refused, not overwritten")
 	}
 }

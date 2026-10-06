@@ -1,10 +1,12 @@
-// pair turns a Claude Code session into a spoken pairing session. One binary
-// serves the CLI, the Claude Code hooks and (from milestone 2) the MCP server.
+// pair turns a coding agent's session (Claude Code, Codex) into a spoken
+// pairing session. One binary serves the CLI, the agent's hooks and the
+// MCP server.
 package main
 
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,34 +30,35 @@ import (
 // version is set by goreleaser through -ldflags.
 var version = "dev"
 
-const usage = `pair — voice-driven pairing for Claude Code in the terminal
+const usage = `pair — voice-driven pairing with a coding agent (Claude Code, Codex) in the terminal
 
 Usage:
   pair [start]       start a new session (editor | presence and activity), or go back
                      to the one that is running
-       --continue    continue the last session: its log, and Claude's conversation
+       --continue    continue the last session: its log, and the agent's conversation
        --name <name> name the session
+       --agent <claude|codex>  the agent for this session (default: PAIR_AGENT, else claude)
   pair sessions      list the sessions of this repository
-  pair resume <id or name>   open a past session again, with Claude's conversation
+  pair resume <id or name>   open a past session again, with the agent's conversation
   pair rename [<id or name>] <new name>
-  pair claude        show or hide Claude Code's pane (hidden by default; F7 in the session)
-  pair init [--lang en] [--voice Samantha] [--rate 190]
-                     prepare this repository: hooks, CLAUDE.md block, MCP server, PAIRING.md
+  pair agent         show or hide the agent's pane (hidden by default; F7 in the session)
+  pair init [--agent claude|codex] [--lang en] [--voice Samantha] [--rate 190]
+                     prepare this repository: hooks, instructions block, MCP server, PAIRING.md
   pair voice         which voice speaks; "pair voice setup kokoro" installs a natural one
   pair doctor        check dependencies and configuration
                      --fix downloads the whisper model, --mic runs the microphone test
   pair stop          kill the session and any running say/rec
-  pair hook <name>   Claude Code hooks: pre_edit, post_edit, stop, prompt
-  pair hook listen   push-to-talk: record, transcribe, type into the Claude pane
-  pair hook interrupt  stop Claude (Escape), then listen
-  pair hook point --file f --start n [--end m] [--note t]   point Claude at a range
-  pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by Claude Code)
+  pair hook <name> [--agent <name>]   the agent's hooks: activity, pre_edit, post_edit, prompt, stop, notify
+  pair hook listen   push-to-talk: record, transcribe, type into the agent's pane
+  pair hook interrupt  stop the agent (Escape), then listen
+  pair hook point --file f --start n [--end m] [--note t]   point the agent at a range
+  pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by the agent)
   pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]   play a session back
   pair log [--follow] [<id or name>]   a session as a conversation (the activity column)
   pair presence      the animated state indicator (the panel above the activity column)
   pair version
 
-Environment: PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
+Environment: PAIR_AGENT, PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
 PAIR_VOICE, PAIR_RATE, PAIR_LANG, PAIR_WHISPER_MODEL, PAIR_ASK_MAX, PAIR_TTS, PAIR_STT,
 PAIR_MUTE (see README.md).
 `
@@ -118,11 +121,7 @@ func main() {
 		case "click": // a click on a status bar button
 			err = hook.Click(args[1:], os.Stdout)
 		default:
-			err = hook.Run(args[0], os.Stdin, os.Stdout)
-			// Claude Code hooks must never fail the tool call: report and exit 0.
-			if err != nil && os.Getenv("PAIR_DEBUG") != "" {
-				fmt.Fprintln(os.Stderr, "pair hook:", err)
-			}
+			runAgentHook(args[0], args[1:])
 			return
 		}
 	case "mcp":
@@ -135,8 +134,8 @@ func main() {
 		err = runPresence()
 	case "voice":
 		err = cli.Voice(args, os.Stdout)
-	case "claude": // show or hide Claude Code's pane
-		err = hook.ToggleClaude(args, os.Stdout)
+	case "agent", "claude": // show or hide the agent's pane; "claude" is the name from the first versions
+		err = hook.ToggleAgent(args, os.Stdout)
 	case "version", "-v", "--version":
 		fmt.Println("pair", version)
 	case "help", "-h", "--help":
@@ -266,4 +265,33 @@ func sessionFile(arg string) (string, error) {
 		return arg, nil
 	}
 	return cli.SessionEvents(arg)
+}
+
+// runAgentHook runs a hook that the agent calls. `--agent <name>` says
+// which agent wrote the input; the hooks `pair init` registers pass it.
+func runAgentHook(name string, args []string) {
+	agentName := ""
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--agent" {
+			agentName = args[i+1]
+		}
+	}
+	guard(func() error { return hook.Run(name, agentName, os.Stdin, os.Stdout) }, os.Stderr)
+}
+
+// guard runs a hook and lets nothing of what goes wrong in it out. A hook
+// must never fail the tool call or the prompt it is attached to: Claude
+// Code and Codex read exit code 2 as "block", and that is the code a Go
+// program exits with when it panics. Errors and panics end here, and are
+// reported only when PAIR_DEBUG asks for it.
+func guard(run func() error, report io.Writer) {
+	debug := os.Getenv("PAIR_DEBUG") != ""
+	defer func() {
+		if r := recover(); r != nil && debug {
+			fmt.Fprintln(report, "pair hook: panic:", r)
+		}
+	}()
+	if err := run(); err != nil && debug {
+		fmt.Fprintln(report, "pair hook:", err)
+	}
 }

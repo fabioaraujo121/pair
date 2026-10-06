@@ -31,12 +31,13 @@ const (
 
 // Meta describes one session.
 type Meta struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name,omitempty"`  // given by the engineer
-	Title         string    `json:"title,omitempty"` // taken from the first prompt
-	Started       time.Time `json:"started"`
-	Ended         time.Time `json:"ended,omitempty"`
-	ClaudeSession string    `json:"claude_session_id,omitempty"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name,omitempty"`  // given by the engineer
+	Title        string    `json:"title,omitempty"` // taken from the first prompt
+	Started      time.Time `json:"started"`
+	Ended        time.Time `json:"ended,omitempty"`
+	Agent        string    `json:"agent,omitempty"`             // which agent held the conversation
+	Conversation string    `json:"claude_session_id,omitempty"` // the agent's own id for it; the key is kept from the first versions
 }
 
 // Label is what to call the session: its name, else its title, else its id.
@@ -97,7 +98,7 @@ func Save(stateDir string, m Meta) error {
 }
 
 func writeMeta(dir string, m Meta) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -105,7 +106,7 @@ func writeMeta(dir string, m Meta) error {
 		return err
 	}
 	tmp := filepath.Join(dir, metaFile+".tmp")
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, filepath.Join(dir, metaFile))
@@ -151,7 +152,7 @@ func Archive(stateDir string) error {
 	}
 
 	dir := filepath.Join(stateDir, archiveDir, meta.ID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	if meta.Ended.IsZero() {
@@ -241,7 +242,7 @@ func archiveLegacy(stateDir string) error {
 		if err := writeMeta(dir, c.meta); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(strings.Join(c.lines, "\n")+"\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, eventsFile), []byte(strings.Join(c.lines, "\n")+"\n"), 0o600); err != nil {
 			return err
 		}
 		if i == len(chunks)-1 { // the plain-text log cannot be split: it goes with the last one
@@ -263,7 +264,7 @@ func absorb(m *Meta, e event) {
 	switch e.Type {
 	case "stop":
 		if id := str("session_id"); id != "" {
-			m.ClaudeSession = id
+			m.Conversation = id
 		}
 	case "prompt":
 		if m.Title == "" {
@@ -296,14 +297,14 @@ func TitleFrom(prompt string) string {
 	return t
 }
 
-// NoteClaude remembers the Claude Code conversation of the current
-// session, so continuing it resumes that conversation.
-func NoteClaude(stateDir, claudeSession string) {
-	if claudeSession == "" {
+// NoteConversation remembers the agent's own id for the current session's
+// conversation, so the session can be continued with it.
+func NoteConversation(stateDir, id string) {
+	if id == "" {
 		return
 	}
-	if m, ok := Current(stateDir); ok && m.ClaudeSession != claudeSession {
-		m.ClaudeSession = claudeSession
+	if m, ok := Current(stateDir); ok && m.Conversation != id {
+		m.Conversation = id
 		_ = writeMeta(stateDir, m)
 	}
 }

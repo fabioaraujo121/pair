@@ -5,9 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	pair "github.com/fabioaraujo121/pair"
+	"github.com/fabioaraujo121/pair/internal/testenv"
 )
 
 // A stand-in for the worker, speaking its protocol with the system
@@ -246,19 +250,28 @@ func TestKokoroVoiceAndLanguage(t *testing.T) {
 
 // TestRealKokoro runs the installed engine: it synthesizes a narration and
 // checks the audio that would be played.
+//
+// It is asked for with PAIR_REAL_AUDIO=1. The installation is only read:
+// the worker script runs from a temporary directory.
 func TestRealKokoro(t *testing.T) {
-	if os.Getenv("PAIR_SKIP_REAL_AUDIO") != "" {
-		t.Skip("PAIR_SKIP_REAL_AUDIO set")
+	if !testenv.RealAudio {
+		t.Skip("set PAIR_REAL_AUDIO=1 to run the installed engine")
 	}
-	home, _ := os.UserHomeDir()
 	dir := t.TempDir()
 	t.Setenv("FAKE_DIR", dir)
 	keeper := filepath.Join(dir, "player")
 	_ = os.WriteFile(keeper, []byte("#!/bin/sh\ncp \"$1\" \"$FAKE_DIR/$(basename \"$1\")\"\n"), 0o755)
-	k := &Kokoro{Dir: filepath.Join(home, ".pair", "kokoro"), Voice: "af_heart", Speed: 1, Player: keeper, OutDir: filepath.Join(dir, "pair-tts")}
-	if ok, why := k.Installed(); !ok {
+	installed := &Kokoro{Dir: filepath.Join(testenv.RealHome, ".pair", "kokoro")}
+	if ok, why := installed.Installed(); !ok {
 		t.Skip("Kokoro is not installed: " + why)
 	}
+	worker := filepath.Join(dir, "worker.py")
+	if err := os.WriteFile(worker, []byte(pair.KokoroWorker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	k := &Kokoro{Voice: "af_heart", Speed: 1, Player: keeper, OutDir: filepath.Join(dir, "pair-tts"),
+		Command: []string{filepath.Join(installed.Dir, "venv", "bin", "python"), "-u", worker,
+			filepath.Join(installed.Dir, installed.modelFile()), filepath.Join(installed.Dir, "voices-v1.0.bin")}}
 	defer k.Close()
 	k.Warm()
 	start := time.Now()
@@ -278,4 +291,60 @@ func TestRealKokoro(t *testing.T) {
 		total += a.Seconds
 	}
 	t.Logf("%.1fs of speech synthesized in %s", total, time.Since(start).Round(10*time.Millisecond))
+}
+
+// An interruption that arrives when the worker has already finished
+// leaves its marker behind. Requests are numbered, and the marker must not
+// silence the one that gets that number later.
+func TestALeftoverInterruptionDoesNotSilenceTheNextSentence(t *testing.T) {
+	k, fb, dir := fakeKokoro(t)
+	if err := os.MkdirAll(k.OutDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"1", "2", "3"} {
+		_ = os.WriteFile(filepath.Join(k.OutDir, id+".cancel"), nil, 0o600)
+	}
+	for _, text := range []string{"First sentence.", "Second sentence.", "Third sentence."} {
+		if err := k.Speak(context.Background(), text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := played(t, dir)
+	if len(got) != 3 || got[0] != "First sentence." || got[2] != "Third sentence." {
+		t.Fatalf("sentences were dropped: %q", got)
+	}
+	if len(fb.spoken) != 0 {
+		t.Fatalf("the fallback voice spoke: %q", fb.spoken)
+	}
+}
+
+func TestPlayingTwiceDoesNotBreakTheVoice(t *testing.T) {
+	k, _, dir := fakeKokoro(t)
+	job := k.Prepare(context.Background(), "Only once.")
+	if err := job.Play(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer func() { _ = recover() }()
+		_ = job.Play(context.Background()) // must not unlock what it does not hold
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a second Play never returned")
+	}
+	if err := k.Speak(context.Background(), "Still working."); err != nil {
+		t.Fatal(err)
+	}
+	if got := played(t, dir); len(got) < 2 || got[len(got)-1] != "Still working." {
+		t.Fatalf("played: %q", got)
+	}
+}
+
+func TestEveryProcessHasItsOwnDirectoryForSound(t *testing.T) {
+	if got := TTSOutDir(); filepath.Base(got) != strconv.Itoa(os.Getpid()) || filepath.Base(filepath.Dir(got)) != "pair-tts" {
+		t.Fatalf("TTSOutDir() = %s", got)
+	}
 }

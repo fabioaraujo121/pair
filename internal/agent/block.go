@@ -1,10 +1,15 @@
-package cli
+package agent
 
 import (
+	"os"
 	"strings"
 
 	pair "github.com/fabioaraujo121/pair"
 )
+
+// The pairing-mode instructions go into the file the agent reads at the
+// start of every conversation (CLAUDE.md, AGENTS.md), between markers, so
+// the rest of the file stays the engineer's.
 
 const (
 	blockStart = "<!-- pair:start -->"
@@ -16,14 +21,13 @@ var languageNames = map[string]string{
 	"de": "German", "it": "Italian", "ja": "Japanese", "nl": "Dutch",
 }
 
-// PairingBlock renders the CLAUDE.md pairing-mode block for a whisper
-// language code.
+// PairingBlock renders the pairing-mode block for a language code.
 func PairingBlock(lang string) string {
 	name := languageNames[strings.ToLower(lang)]
 	if name == "" {
 		name = lang
 	}
-	body := strings.TrimSpace(strings.ReplaceAll(pair.ClaudeBlockTemplate, "{{LANGUAGE}}", name))
+	body := strings.TrimSpace(strings.ReplaceAll(pair.InstructionsTemplate, "{{LANGUAGE}}", name))
 	return blockStart + "\n" + body + "\n" + blockEnd + "\n"
 }
 
@@ -47,4 +51,14 @@ func UpsertBlock(content, block string) string {
 		content += "\n"
 	}
 	return content + "\n" + block
+}
+
+// writeBlock puts the block into path. It reports whether the file changed.
+func writeBlock(path, lang string) (bool, error) {
+	current, _ := os.ReadFile(path)
+	updated := UpsertBlock(string(current), PairingBlock(lang))
+	if updated == string(current) {
+		return false, nil
+	}
+	return true, os.WriteFile(path, []byte(updated), 0o644)
 }

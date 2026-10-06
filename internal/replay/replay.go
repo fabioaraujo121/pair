@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/fabioaraujo121/pair/internal/nvim"
+	"github.com/fabioaraujo121/pair/internal/plain"
 	"github.com/fabioaraujo121/pair/internal/speech"
 )
 
@@ -114,7 +115,8 @@ func play(ctx context.Context, e Event, opts Options) error {
 		_, _ = opts.Nvim.Show(ctx, file, start, end)
 	}
 	line := func(format string, a ...any) {
-		fmt.Fprintf(opts.Out, "%s  "+format+"\n", append([]any{stamp}, a...)...)
+		// What is replayed was said or written by someone: it is printed as text.
+		fmt.Fprintln(opts.Out, stamp+"  "+plain.Text(fmt.Sprintf(format, a...)))
 	}
 
 	switch e.Type {

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/term"
@@ -150,7 +151,7 @@ func Frame(st status.Status, frame, width int, now time.Time, color bool) []stri
 		glyph = "⚠"
 	}
 
-	label := status.Label(st.State)
+	label := status.Label(st.State, st.Agent)
 	switch st.State {
 	case tmux.StateIdle:
 		label += " · press F5 or click talk"
@@ -176,7 +177,14 @@ func Frame(st status.Status, frame, width int, now time.Time, color bool) []stri
 		head += "  " + elapsed
 	}
 
-	detail := strings.TrimSpace(st.Detail)
+	// One line, whatever it holds: a command the agent runs can span several,
+	// and the panel has room for four.
+	detail := strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r' {
+			return -1
+		}
+		return r
+	}, st.Detail)), " ")
 	if st.State == tmux.StateAsking || st.State == tmux.StateListening {
 		detail = "" // the label already says what to do
 	}

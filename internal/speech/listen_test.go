@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/fabioaraujo121/pair/internal/testenv"
 )
 
 func sine(rate int, seconds, amplitude float64) []int16 {
@@ -309,12 +311,12 @@ func TestVocabularyPrompt(t *testing.T) {
 
 // TestRealWhisperOnSynthesizedSpeech runs the actual toolchain when it is
 // installed: `say` writes a 16 kHz WAV, whisper-cli transcribes it.
+// It is asked for with PAIR_REAL_AUDIO=1.
 func TestRealWhisperOnSynthesizedSpeech(t *testing.T) {
-	if os.Getenv("PAIR_SKIP_REAL_AUDIO") != "" {
-		t.Skip("PAIR_SKIP_REAL_AUDIO set")
+	if !testenv.RealAudio {
+		t.Skip("set PAIR_REAL_AUDIO=1 to run the installed toolchain")
 	}
-	home, _ := os.UserHomeDir()
-	model := filepath.Join(home, ".pair", "models", "ggml-large-v3-turbo.bin")
+	model := filepath.Join(testenv.RealHome, ".pair", "models", "ggml-large-v3-turbo.bin")
 	if _, err := os.Stat(model); err != nil {
 		t.Skip("whisper model not downloaded")
 	}

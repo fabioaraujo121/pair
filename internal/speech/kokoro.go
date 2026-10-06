@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,7 +35,7 @@ type Kokoro struct {
 	Speed    float64  // 1.0 is the natural pace
 	Player   string   // afplay
 	OutDir   string   // where sentence files go
-	StateDir string   // the session's state directory, to track the player
+	RunDir   string   // the session's run directory, to track the player
 	Command  []string // how to start the worker; derived from Dir when empty
 	Fallback Speaker
 	Warn     func(string) // told once why the fallback is in use
@@ -61,8 +62,13 @@ type workerMsg struct {
 	Error   string   `json:"error"`
 }
 
-// TTSOutDir is where sentence files are written.
-func TTSOutDir() string { return filepath.Join(os.TempDir(), "pair-tts") }
+// TTSOutDir is where sentence files are written: a directory of its own
+// for each process. Requests are numbered from 1 in every process, so a
+// shared directory would let one session's files and markers be taken for
+// another's.
+func TTSOutDir() string {
+	return filepath.Join(os.TempDir(), "pair-tts", strconv.Itoa(os.Getpid()))
+}
 
 // KokoroDir is the default installation directory.
 func KokoroDir(cfg config.Config) string { return filepath.Join(cfg.UserDir, "kokoro") }
@@ -80,8 +86,8 @@ func NewKokoro(cfg config.Config) *Kokoro {
 		Speed:    cfg.KokoroSpeed,
 		Player:   "afplay",
 		OutDir:   TTSOutDir(),
-		StateDir: cfg.StateDir,
-		Fallback: &Say{Voice: cfg.Voice, Rate: cfg.Rate, StateDir: cfg.StateDir},
+		RunDir:   cfg.RunDir,
+		Fallback: &Say{Voice: cfg.Voice, Rate: cfg.Rate, RunDir: cfg.RunDir},
 	}
 }
 
@@ -191,6 +197,28 @@ func (k *Kokoro) Close() {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 	k.stop()
+	if k.OutDir == TTSOutDir() {
+		_ = os.RemoveAll(k.OutDir)
+	}
+}
+
+// sweepOutDirs removes the directories left by processes that are gone: one
+// that was killed had no chance to remove its own.
+func sweepOutDirs() {
+	root := filepath.Dir(TTSOutDir())
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || !e.IsDir() || pid == os.Getpid() {
+			continue
+		}
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			_ = os.RemoveAll(filepath.Join(root, e.Name()))
+		}
+	}
 }
 
 // start launches the worker and waits until the model is loaded. The
@@ -240,6 +268,9 @@ func (k *Kokoro) start() error {
 		_ = cmd.Wait()
 	}()
 	k.cmd, k.stdin, k.msgs = cmd, stdin, msgs
+	if k.OutDir == TTSOutDir() {
+		sweepOutDirs()
+	}
 
 	select {
 	case m, open := <-msgs:
@@ -294,7 +325,10 @@ func (k *Kokoro) Prepare(_ context.Context, text string) Prepared {
 	}
 	k.nextID++
 	job.id = k.nextID
-	_ = os.MkdirAll(k.OutDir, 0o755)
+	_ = os.MkdirAll(k.OutDir, 0o700)
+	// An interruption that came after the worker had finished leaves its
+	// marker behind: it must not stop the request that gets the same number.
+	_ = os.Remove(filepath.Join(k.OutDir, fmt.Sprintf("%d.cancel", job.id)))
 	speed := k.Speed
 	if speed <= 0 {
 		speed = 1
@@ -315,16 +349,19 @@ type kokoroJob struct {
 	text   string
 	empty  bool
 	locked bool
+	played bool
 	failed error
 }
 
 // Play plays the sentences as the worker delivers them.
 func (j *kokoroJob) Play(ctx context.Context) error {
-	if j.empty {
-		return nil
+	if j.empty || j.played {
+		return nil // nothing to say, or said already
 	}
+	j.played = true
 	k := j.k
 	if j.locked {
+		j.locked = false
 		defer k.mu.Unlock()
 	}
 	if j.failed != nil {
@@ -375,7 +412,7 @@ func (j *kokoroJob) Play(ctx context.Context) error {
 
 // cancel tells the worker to stop after the sentence it is on.
 func (j *kokoroJob) cancel() {
-	_ = os.WriteFile(filepath.Join(j.k.OutDir, fmt.Sprintf("%d.cancel", j.id)), nil, 0o644)
+	_ = os.WriteFile(filepath.Join(j.k.OutDir, fmt.Sprintf("%d.cancel", j.id)), nil, 0o600)
 }
 
 // play plays one file and waits. SIGTERM on the player, from ctx or from
@@ -388,7 +425,7 @@ func (k *Kokoro) play(ctx context.Context, path string) error {
 	cmd := exec.CommandContext(ctx, player, path)
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = time.Second
-	if err := runTracked(cmd, k.StateDir, trackSpeech); err != nil {
+	if err := runTracked(cmd, k.RunDir, trackSpeech); err != nil {
 		if ctx.Err() != nil || terminated(err) {
 			return ErrInterrupted
 		}

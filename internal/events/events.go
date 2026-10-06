@@ -17,8 +17,24 @@ type Log struct {
 
 // Open makes sure dir exists and returns a Log for it.
 func Open(dir string) *Log {
-	_ = os.MkdirAll(dir, 0o755)
+	Private(dir)
 	return &Log{Dir: dir}
+}
+
+// Private makes sure the state directory exists, is readable by its owner
+// only, and is ignored by git whether or not `pair init` was run: it holds
+// prompts, transcripts and the engineer's recorded voice.
+func Private(dir string) {
+	if os.MkdirAll(dir, 0o700) != nil {
+		return
+	}
+	if fi, err := os.Stat(dir); err == nil && fi.Mode().Perm() != 0o700 {
+		_ = os.Chmod(dir, 0o700)
+	}
+	ignore := filepath.Join(dir, ".gitignore")
+	if _, err := os.Stat(ignore); os.IsNotExist(err) {
+		_ = os.WriteFile(ignore, []byte("# pair session state: never committed\n*\n"), 0o600)
+	}
 }
 
 // Append writes one {ts, type, payload} line to events.jsonl.
@@ -57,11 +73,14 @@ func (l *Log) SessionRaw(b []byte) error {
 func (l *Log) SessionLogPath() string { return filepath.Join(l.Dir, "session.log") }
 
 func appendBytes(path string, b []byte) error {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Mode().Perm() != 0o600 {
+		_ = f.Chmod(0o600) // written by an earlier version
+	}
 	_, err = f.Write(b)
 	return err
 }

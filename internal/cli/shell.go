@@ -7,29 +7,22 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/fabioaraujo121/pair/internal/shell"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
 
-// tmux and hasSession keep the call sites short.
+// Thin seams over the tmux and shell packages, so tests can read them.
 func tmuxRun(args ...string) (string, error) { return tmux.Run(args...) }
 func hasSession(name string) bool            { return tmux.HasSession(name) }
-
-// shellQuote wraps s in single quotes for a POSIX shell, unless it is a
-// plain word that needs none.
-func shellQuote(s string) string {
-	if s != "" && !strings.ContainsAny(s, " \t\n'\"\\$`&|;<>()*?[]#~") {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
-}
+func shellQuote(s string) string             { return shell.Quote(s) }
 
 // stdinIsTerminal reports whether pair was started from an interactive shell.
 func stdinIsTerminal() bool {
 	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
-// terminalSize returns the current terminal's columns and lines, or a
-// sensible default when there is no terminal.
+// terminalSize returns the current terminal's columns and lines as strings
+// for tmux's -x/-y, falling back to a comfortable default.
 func terminalSize() (cols, lines string) {
 	cols, lines = "200", "50"
 	if !stdinIsTerminal() {

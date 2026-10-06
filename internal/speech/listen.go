@@ -46,7 +46,7 @@ func (Deaf) Listen(context.Context) (Heard, error) { return Heard{Dropped: "mute
 
 // Recorder captures the microphone with sox `rec` until trailing silence.
 type Recorder struct {
-	StateDir     string        // the session's state directory, to track the process
+	RunDir       string        // the session's run directory, to track the process
 	Bin          string        // defaults to "rec"
 	Rate         int           // 16000
 	SilenceLevel string        // "1%"
@@ -86,7 +86,7 @@ func (r *Recorder) Record(ctx context.Context, path string) (Recording, error) {
 		max = time.Duration(config.DefaultAskMax) * time.Second
 	}
 	_ = os.Remove(path)
-	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	_ = os.MkdirAll(filepath.Dir(path), 0o700)
 
 	rctx, cancel := context.WithTimeout(ctx, max)
 	defer cancel()
@@ -99,12 +99,13 @@ func (r *Recorder) Record(ctx context.Context, path string) (Recording, error) {
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 2 * time.Second
-	runErr := runTracked(cmd, r.StateDir, trackRecord)
+	runErr := runTracked(cmd, r.RunDir, trackRecord)
 
 	if ctx.Err() != nil {
 		return Recording{Path: path}, ErrInterrupted
 	}
 	rec := Recording{Path: path, Capped: rctx.Err() != nil}
+	_ = os.Chmod(path, 0o600) // the engineer's voice
 	audio, err := AnalyzeWAV(path)
 	if err == nil {
 		rec.Exists, rec.Audio = true, audio
@@ -227,7 +228,7 @@ func MicLockPath(cfg config.Config) string {
 func NewVoiceListener(cfg config.Config) *VoiceListener {
 	return &VoiceListener{
 		Rec: &Recorder{
-			StateDir:     cfg.StateDir,
+			RunDir:       cfg.RunDir,
 			Rate:         16000,
 			SilenceLevel: cfg.SilenceLevel,
 			SilenceSecs:  cfg.SilenceSecs,

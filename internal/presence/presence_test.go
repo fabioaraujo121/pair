@@ -70,3 +70,25 @@ func TestWorkingShowsElapsedTimeAndDetail(t *testing.T) {
 		t.Fatal("working must be yellow")
 	}
 }
+
+// The detail can be a command that spans several lines, or hold what a
+// terminal reads as an instruction. The panel is four rows of text.
+func TestDetailIsOneLineOfText(t *testing.T) {
+	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	st := status.Status{State: tmux.StateWorking, Turn: now, Since: now,
+		Detail: "running bundle exec rspec \\\n  spec/models \\\n\tspec/requests\x1b[2J\x1b]0;owned\x07"}
+	for _, color := range []bool{false, true} {
+		lines := Frame(st, 3, 60, now, color)
+		if len(lines) != 4 {
+			t.Fatalf("%d rows", len(lines))
+		}
+		for _, l := range lines {
+			if strings.ContainsAny(l, "\n\r\t\x07") || strings.Contains(l, "\x1b[2J") || strings.Contains(l, "\x1b]") {
+				t.Fatalf("the detail drives the terminal: %q", l)
+			}
+		}
+		if !strings.Contains(lines[3], "running bundle exec rspec \\ spec/models \\ spec/requests") {
+			t.Fatalf("detail: %q", lines[3])
+		}
+	}
+}

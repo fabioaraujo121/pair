@@ -16,11 +16,12 @@ var PluginFS embed.FS
 //go:embed templates/PAIRING.md
 var PairingTemplate string
 
-// ClaudeBlockTemplate is the pairing-mode block for CLAUDE.md; {{LANGUAGE}}
-// is replaced with the spoken language.
+// InstructionsTemplate is the pairing-mode block written into the file the
+// agent reads its instructions from (CLAUDE.md, AGENTS.md); {{LANGUAGE}} is
+// replaced with the spoken language.
 //
-//go:embed templates/CLAUDE.md.tmpl
-var ClaudeBlockTemplate string
+//go:embed templates/pairing-block.md.tmpl
+var InstructionsTemplate string
 
 // HammerspoonTemplate defines the global hotkeys; {{PAIR_BIN}} is replaced
 // with the binary path.

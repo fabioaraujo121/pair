@@ -31,7 +31,7 @@ type PendingAsk struct {
 // SetPendingAsk records that a question is waiting and drops any stale
 // answer.
 func SetPendingAsk(stateDir, question string) error {
-	_ = os.MkdirAll(stateDir, 0o755)
+	_ = os.MkdirAll(stateDir, 0o700)
 	_ = os.Remove(filepath.Join(stateDir, answerFile))
 	data, _ := json.Marshal(PendingAsk{Question: question, Since: time.Now()})
 	return writeAtomic(filepath.Join(stateDir, pendingFile), data)
@@ -93,7 +93,7 @@ func WaitForAnswer(ctx context.Context, stateDir string, timeout time.Duration) 
 
 func writeAtomic(path string, data []byte) error {
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)

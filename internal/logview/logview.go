@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fabioaraujo121/pair/internal/plain"
 	"github.com/fabioaraujo121/pair/internal/replay"
 )
 
@@ -35,7 +36,8 @@ type Entry struct {
 // read as a repetition: a spoken prompt is logged both by the microphone
 // and by Claude Code, an answer both by the microphone and by the question.
 type Builder struct {
-	Root string // repository root, to show relative paths
+	Root  string // repository root, to show relative paths
+	Agent string // the agent's name as a speaker; "claude" until the session says otherwise
 
 	lastHeard     string
 	lastHeardAt   time.Time
@@ -51,9 +53,12 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 
 	switch e.Type {
 	case "session_start", "session_continue":
+		if name := str(p, "agent"); name != "" {
+			b.Agent = name
+		}
 		what := "session started"
 		if e.Type == "session_continue" {
-			what = "session continued · Claude remembers the conversation above"
+			what = "session continued · " + b.who() + " remembers the conversation above"
 		}
 		if name := str(p, "name"); name != "" && name != str(p, "id") {
 			what = "“" + name + "” · " + what
@@ -98,25 +103,25 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		return one(Entry{Speaker: You, Card: "✋ interrupted"})
 
 	case "narrate":
-		return one(Entry{Speaker: Claude, Text: str(p, "text")})
+		return one(Entry{Speaker: b.speaker(), Text: str(p, "text")})
 	case "show":
-		return one(Entry{Speaker: Claude, Card: "→ " + b.ref(p), Text: str(p, "note")})
+		return one(Entry{Speaker: b.speaker(), Card: "→ " + b.ref(p), Text: str(p, "note")})
 	case "post_edit":
 		card := "✎ " + b.rel(str(p, "file"))
 		if _, has := p["added"]; has {
 			card += fmt.Sprintf("  +%d −%d", num(p, "added"), num(p, "removed"))
 		}
-		return one(Entry{Speaker: Claude, Card: card})
+		return one(Entry{Speaker: b.speaker(), Card: card})
 
 	case "question":
 		b.questionOpen, b.questionAnswd = true, false
-		return one(Entry{Speaker: Claude, Label: "claude asks", Text: str(p, "text")})
+		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " asks", Text: str(p, "text")})
 	case "ask": // the closing record of a question; the answer may be shown already
 		defer func() { b.questionOpen = false }()
 		ans, _ := p["answer"].(map[string]any)
 		var out []Entry
 		if !b.questionOpen { // logs written before questions were announced
-			out = append(out, Entry{Time: at, Speaker: Claude, Label: "claude asks", Text: str(p, "text")})
+			out = append(out, Entry{Time: at, Speaker: b.speaker(), Label: b.speaker() + " asks", Text: str(p, "text")})
 		}
 		switch {
 		case p["interrupted"] == true:
@@ -129,14 +134,28 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		return out, len(out) > 0
 
 	case "notify":
-		if str(p, "kind") == "idle_prompt" {
+		if str(p, "kind") == "idle_prompt" || p["idle"] == true {
 			return nil, false
 		}
-		return one(Entry{Speaker: Claude, Label: "claude needs you", Text: str(p, "message") + " (the Claude pane below; F7 for full screen)"})
+		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " needs you", Text: str(p, "message") + " (the " + b.who() + " pane below; F7 for full screen)"})
 	case "stop":
 		return one(Entry{Dim: true, Card: "your turn"})
 	}
 	return nil, false
+}
+
+// speaker is the agent's name as a speaker, lower case.
+func (b *Builder) speaker() string {
+	if b.Agent == "" {
+		return Claude
+	}
+	return strings.ToLower(b.Agent)
+}
+
+// who is the agent's name in a sentence.
+func (b *Builder) who() string {
+	name := b.speaker()
+	return strings.ToUpper(name[:1]) + name[1:]
 }
 
 func (b *Builder) rel(file string) string {
@@ -192,8 +211,19 @@ const (
 // Reset forgets the grouping state, before a full re-render.
 func (p *Printer) Reset() { p.lastHeader, p.any, p.lastAt = "", false, time.Time{} }
 
+// Clean makes text that pair did not write safe to print; see package
+// plain.
+func Clean(s string, keepLines bool) string {
+	if keepLines {
+		return plain.Text(s)
+	}
+	return plain.Line(s)
+}
+
 // Print writes one entry.
 func (p *Printer) Print(e Entry) {
+	e.Text, e.Card = Clean(e.Text, true), Clean(e.Card, false)
+	e.Label, e.Speaker = Clean(e.Label, false), Clean(e.Speaker, false)
 	width := p.Width
 	if width < 20 {
 		width = 20
@@ -225,9 +255,9 @@ func (p *Printer) Print(e Entry) {
 		switch {
 		case e.Speaker == You:
 			color = green
-		case e.Label == "claude asks":
+		case strings.HasSuffix(e.Label, " asks"):
 			color = magenta
-		case e.Label == "claude needs you":
+		case strings.HasSuffix(e.Label, " needs you"):
 			color = red
 		}
 		stamp := ""

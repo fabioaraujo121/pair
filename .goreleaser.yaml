@@ -53,7 +53,7 @@ homebrew_casks:
     binaries:
       - pair
     homepage: https://github.com/fabioaraujo121/pair
-    description: Voice-driven pairing for Claude Code in the terminal
+    description: Voice-driven pairing with a coding agent (Claude Code, Codex) in the terminal
     license: MIT
     directory: Casks
     skip_upload: auto

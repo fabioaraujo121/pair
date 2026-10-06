@@ -11,59 +11,82 @@ import (
 )
 
 // A session must be able to silence its own voice and stop its own
-// recording without touching those of another session on the same
-// machine. So the processes that make or capture sound are tracked: their
-// pid is written under <state dir>/run while they live, and an interrupt
-// signals exactly those.
+// recording without touching anything else on the machine. So the
+// processes that make or capture sound are tracked while they live, in
+// the session's run directory, which is under ~/.pair and not in the
+// repository: a repository cannot plant a file there.
+//
+// A pid alone names whatever process holds it now. The file also records
+// when the process began, and a signal is sent only to a process that
+// began at that moment: a file left behind by a crash can never reach a
+// process that came to reuse the pid.
 
 const (
 	trackSpeech = "speech" // say, or the player of a neural voice
 	trackRecord = "record" // rec
 )
 
-// runTracked runs cmd, recording its pid in dir under the given kind for
-// as long as it runs. An empty dir means no tracking.
+// runTracked runs cmd, tracking it in dir under the given kind for as long
+// as it runs. An empty dir means no tracking.
 func runTracked(cmd *exec.Cmd, dir, kind string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	if dir != "" {
-		run := filepath.Join(dir, "run")
-		if os.MkdirAll(run, 0o755) == nil {
-			file := filepath.Join(run, kind+"-"+strconv.Itoa(cmd.Process.Pid)+".pid")
-			if os.WriteFile(file, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644) == nil {
-				defer os.Remove(file)
-			}
+	if dir != "" && os.MkdirAll(dir, 0o700) == nil {
+		pid := cmd.Process.Pid
+		file := filepath.Join(dir, kind+"-"+strconv.Itoa(pid)+".pid")
+		if os.WriteFile(file, []byte(strconv.Itoa(pid)+"\n"+processBegan(pid)+"\n"), 0o600) == nil {
+			defer os.Remove(file)
 		}
 	}
 	return cmd.Wait()
 }
 
-// signalTracked sends SIGTERM to the tracked processes of a kind.
+// processBegan returns when a process began, as the system prints it, or
+// "" when there is no such process.
+func processBegan(pid int) string {
+	out, err := exec.Command("ps", "-o", "lstart=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// signalTracked sends SIGTERM to the tracked processes of a kind that are
+// still the ones that were tracked.
 func signalTracked(dir, kind string) {
-	files, _ := filepath.Glob(filepath.Join(dir, "run", kind+"-*.pid"))
+	files, _ := filepath.Glob(filepath.Join(dir, kind+"-*.pid"))
 	for _, f := range files {
-		data, err := os.ReadFile(f)
-		if err != nil {
-			continue
-		}
-		if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pid > 1 {
+		if pid, began, ok := readTracked(f); ok && began != "" && processBegan(pid) == began {
 			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
 		_ = os.Remove(f)
 	}
 }
 
-// KillSpeech silences the session whose state directory is dir.
+func readTracked(file string) (pid int, began string, ok bool) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return 0, "", false
+	}
+	first, rest, _ := strings.Cut(string(data), "\n")
+	pid, err = strconv.Atoi(strings.TrimSpace(first))
+	if err != nil || pid <= 1 {
+		return 0, "", false
+	}
+	return pid, strings.TrimSpace(rest), true
+}
+
+// KillSpeech silences the session whose run directory is dir.
 func KillSpeech(dir string) { signalTracked(dir, trackSpeech) }
 
-// KillRecording stops the recording of the session whose state directory
-// is dir.
+// KillRecording stops the recording of the session whose run directory is
+// dir.
 func KillRecording(dir string) { signalTracked(dir, trackRecord) }
 
 // RecordingSince reports when the session's recording in progress began.
 func RecordingSince(dir string) (time.Time, bool) {
-	files, _ := filepath.Glob(filepath.Join(dir, "run", trackRecord+"-*.pid"))
+	files, _ := filepath.Glob(filepath.Join(dir, trackRecord+"-*.pid"))
 	var since time.Time
 	for _, f := range files {
 		if fi, err := os.Stat(f); err == nil && (since.IsZero() || fi.ModTime().Before(since)) {
@@ -86,13 +109,13 @@ const (
 // asks to end the recording in progress: a press of its own, not the echo
 // of a key held down, on a recording that has had time to start.
 func PressWantsStop(dir string, now time.Time) bool {
-	marker := filepath.Join(dir, "run", pressMarker)
+	marker := filepath.Join(dir, pressMarker)
 	var previous time.Time
 	if fi, err := os.Stat(marker); err == nil {
 		previous = fi.ModTime()
 	}
-	_ = os.MkdirAll(filepath.Dir(marker), 0o755)
-	_ = os.WriteFile(marker, nil, 0o644)
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(marker, nil, 0o600)
 	_ = os.Chtimes(marker, now, now)
 
 	since, recording := RecordingSince(dir)

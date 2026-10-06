@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/speech"
@@ -17,21 +18,21 @@ import (
 )
 
 // Voice subcommands are started by a keymap or a global hotkey, not by
-// Claude Code, so they read no stdin. They find the repository through
+// the agent, so they read no stdin. They find the repository through
 // --root, the tmux session's PAIR_ROOT, or the working directory.
 
 // Listen is push-to-talk: silence any speech, record until the engineer
-// pauses, transcribe, and type the transcript into the Claude Code pane.
+// pauses, transcribe, and type the transcript into the agent's pane.
 func Listen(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
-	wantsStop := speech.PressWantsStop(cfg.StateDir, time.Now())
+	wantsStop := speech.PressWantsStop(cfg.RunDir, time.Now())
 	lock, busy := micLock(cfg, out)
 	if busy {
 		// The microphone is open: a new press of the key, or a click on
 		// the button that now reads "stop", ends the recording. What was
 		// said is transcribed and sent by the command that is recording.
 		if wantsStop {
-			speech.KillRecording(cfg.StateDir)
+			speech.KillRecording(cfg.RunDir)
 			fmt.Fprintln(out, "(recording stopped)")
 		}
 		return nil
@@ -50,53 +51,57 @@ func Click(args []string, out io.Writer) error {
 		return Listen(args[1:], out)
 	case "stop":
 		return Interrupt(args[1:], out)
-	case "claude":
-		return ToggleClaude(args[1:], out)
+	case "agent", "claude": // "claude" was the button's name when Claude Code was the only agent
+		return ToggleAgent(args[1:], out)
 	}
 	return nil // a click anywhere else on the status bar
 }
 
-// ToggleClaude shows Claude Code's pane under the editor, or hides it
-// again. From then on the pane is the engineer's: pair no longer hides it
-// by itself.
-func ToggleClaude(args []string, out io.Writer) error {
+// ToggleAgent shows the agent's pane under the editor, or hides it again.
+// From then on the pane is the engineer's: pair no longer hides it by
+// itself.
+func ToggleAgent(args []string, out io.Writer) error {
 	for _, a := range args {
 		if a == "--if-waiting" {
-			return showClaudeIfWaiting(voiceConfig(args), out)
+			return showAgentIfWaiting(voiceConfig(args), out)
 		}
 	}
 	cfg := voiceConfig(args)
 	_ = os.Remove(filepath.Join(cfg.StateDir, "claude_autoshown"))
-	visible, err := tmux.ToggleClaude(cfg.Session, cfg.ClaudeHeight)
+	visible, err := tmux.ToggleAgent(cfg.Session, cfg.ClaudeHeight)
 	if err != nil {
 		return err
 	}
+	who := strings.ToLower(status.Who(cfg))
 	if visible {
-		fmt.Fprintln(out, "claude shown")
+		fmt.Fprintln(out, who+" shown")
 	} else {
-		fmt.Fprintln(out, "claude hidden")
+		fmt.Fprintln(out, who+" hidden")
 	}
 	return nil
 }
 
-// Interrupt stops Claude mid-turn and hands the microphone to the engineer:
-// kill `say`, send Escape, wait for the prompt, then Listen.
+// Interrupt stops the agent mid-turn and hands the microphone to the
+// engineer: kill `say`, press the agent's interrupt key, wait for the
+// prompt, then Listen.
 func Interrupt(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
-	// The lock comes first: a key that auto-repeats must not send Escape
-	// several times (two in a row open Claude Code's rewind menu).
+	// The lock comes first: a key that auto-repeats must not send the
+	// interrupt key several times (two Escapes in a row open a menu in
+	// Claude Code and edit the last message in Codex).
 	lock, busy := micLock(cfg, out)
 	if busy {
 		return nil
 	}
 	defer lock.Release()
-	speech.KillSpeech(cfg.StateDir)
+	speech.KillSpeech(cfg.RunDir)
 	log := events.Open(cfg.StateDir)
 	if tmux.HasSession(cfg.Session) {
-		if err := tmux.SendEscape(cfg.Session); err != nil {
+		ag, _ := agent.For(cfg.Agent)
+		if err := tmux.SendKeys(cfg.Session, ag.InterruptKeys()...); err != nil {
 			return err
 		}
-		time.Sleep(400 * time.Millisecond) // the input is back ~0.3 s after Escape
+		time.Sleep(400 * time.Millisecond) // the input is back ~0.3 s after the key
 	}
 	_ = log.Append("interrupt", nil)
 	_ = log.Session("✋ interrupted")
@@ -119,10 +124,10 @@ func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
 }
 
 // listenAndInject records once and routes the transcript: to the question
-// Claude is waiting on when there is one (answerAsk), otherwise into Claude
-// Code's input as a new prompt.
+// the agent is waiting on when there is one (answerAsk), otherwise into the
+// agent's input as a new prompt.
 func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
-	speech.KillSpeech(cfg.StateDir)
+	speech.KillSpeech(cfg.RunDir)
 	log := events.Open(cfg.StateDir)
 	listener, err := speech.NewListener(cfg, false) // the caller holds the lock
 	if err != nil {
@@ -139,15 +144,15 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	_, asked := speech.PendingAskFor(cfg.StateDir, time.Duration(cfg.AskWait+60)*time.Second)
 	asked = asked && answerAsk
 	if inSession {
-		// The microphone closes: show what Claude reported while it was
-		// open, or else where things stand.
+		// The microphone closes: show what the agent reported while it
+		// was open, or else where things stand.
 		switch {
 		case asked && heard.Text == "":
 			status.ListeningDone(cfg, tmux.StateAsking, "press F5 or click talk to answer")
 		case asked:
 			status.ListeningDone(cfg, tmux.StateWorking, "")
 		case before.State != tmux.StateIdle && before.State != tmux.StateListening:
-			status.ListeningDone(cfg, before.State, before.Detail) // Claude is still at what it was doing
+			status.ListeningDone(cfg, before.State, before.Detail) // the agent is still at what it was doing
 		default:
 			status.ListeningDone(cfg, tmux.StateIdle, "")
 		}
@@ -178,7 +183,7 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 		return nil
 	}
 	if asked {
-		// Claude is waiting on a question: this is its answer, not a prompt.
+		// The agent is waiting on a question: this is its answer, not a prompt.
 		if err := speech.DeliverAnswer(cfg.StateDir, heard); err != nil {
 			return err
 		}
@@ -190,8 +195,9 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 	}
 	_ = log.Session("🎙 " + heard.Text)
 	if inSession {
-		if err := tmux.SendPrompt(cfg.Session, heard.Text); err != nil {
-			return fmt.Errorf("transcribed %q but could not send it to Claude: %v", heard.Text, err)
+		ag, _ := agent.For(cfg.Agent)
+		if err := tmux.SendPrompt(cfg.Session, heard.Text, ag.SubmitDelay()); err != nil {
+			return fmt.Errorf("transcribed %q but could not send it to %s: %v", heard.Text, status.Who(cfg), err)
 		}
 		tmux.Message(cfg.Session, "🎙 sent: "+heard.Text)
 	}
@@ -216,7 +222,7 @@ func repeated(cfg config.Config, text string) bool {
 		}
 	}
 	_ = os.MkdirAll(cfg.UserDir, 0o755)
-	_ = os.WriteFile(path, []byte(now.Format(time.RFC3339Nano)+"\n"+text), 0o644)
+	_ = os.WriteFile(path, []byte(now.Format(time.RFC3339Nano)+"\n"+text), 0o600)
 	return same
 }
 
@@ -247,34 +253,30 @@ func voiceConfig(args []string) config.Config {
 	return here
 }
 
-// showClaudeIfWaiting opens Claude Code's pane when it sits on a dialog
-// that no hook announces: the workspace trust question of a repository
-// opened for the first time. Without this the session would look idle
-// for ever, with the question out of sight.
-func showClaudeIfWaiting(cfg config.Config, out io.Writer) error {
-	if cfg.Session == "" || tmux.ClaudeVisible(cfg.Session) {
+// showAgentIfWaiting opens the agent's pane when it sits on a dialog that
+// no hook announces: the workspace trust question of a repository opened
+// for the first time. Without this the session would look idle for ever,
+// with the question out of sight.
+func showAgentIfWaiting(cfg config.Config, out io.Writer) error {
+	if cfg.Session == "" || tmux.AgentVisible(cfg.Session) {
 		return nil
 	}
-	screen, err := tmux.Run("capture-pane", "-p", "-t", tmux.ClaudePane(cfg.Session))
+	screen, err := tmux.Run("capture-pane", "-p", "-t", tmux.AgentPane(cfg.Session))
 	if err != nil {
 		return err
 	}
-	if !WaitingOnDialog(screen) {
-		return nil
-	}
-	if err := tmux.ShowClaude(cfg.Session, cfg.ClaudeHeight); err != nil {
+	ag, err := agent.For(cfg.Agent)
+	if err != nil {
 		return err
 	}
-	status.Set(cfg, tmux.StateAttention, "answer Claude Code's question below")
-	_ = events.Open(cfg.StateDir).Session("⚠ Claude Code is asking something before it can start: see its pane below")
-	fmt.Fprintln(out, "claude shown: it is waiting on a dialog")
+	if !ag.WaitingOnDialog(screen) {
+		return nil
+	}
+	if err := tmux.ShowAgent(cfg.Session, cfg.ClaudeHeight); err != nil {
+		return err
+	}
+	status.Set(cfg, tmux.StateAttention, "answer "+ag.Title()+"'s question below")
+	_ = events.Open(cfg.StateDir).Session("⚠ " + ag.Title() + " is asking something before it can start: see its pane below")
+	fmt.Fprintln(out, strings.ToLower(ag.Short())+" shown: it is waiting on a dialog")
 	return nil
-}
-
-// WaitingOnDialog reports whether Claude Code's screen shows a question
-// that blocks it before any hook can run.
-func WaitingOnDialog(screen string) bool {
-	s := strings.ToLower(screen)
-	return strings.Contains(s, "trust this folder") || strings.Contains(s, "do you trust") ||
-		(strings.Contains(s, "enter to confirm") && strings.Contains(s, "esc to cancel"))
 }

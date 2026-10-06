@@ -1,13 +1,14 @@
-// Package hook implements the `pair hook <name>` subcommands that Claude Code
-// runs through .claude/settings.json. Each handler reads the hook's JSON on
-// stdin, does its work, logs an event, and never makes the tool call fail:
-// main exits 0 for hooks whatever happens here.
+// Package hook implements the `pair hook <name>` subcommands that the agent
+// runs at the points of its work pair cares about: before and after an
+// edit, at a prompt, at the end of a turn, when it needs a permission. Each
+// handler reads what the agent wrote on stdin through the agent's adapter,
+// does its work, logs an event, and never makes the tool call fail: main
+// exits 0 for hooks whatever happens here.
 package hook
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/nvim"
@@ -23,51 +25,6 @@ import (
 	"github.com/fabioaraujo121/pair/internal/status"
 	"github.com/fabioaraujo121/pair/internal/tmux"
 )
-
-// Input is the JSON Claude Code writes to a hook's stdin (fields observed on
-// 2.1.282; unknown fields are ignored).
-type Input struct {
-	SessionID      string          `json:"session_id"`
-	TranscriptPath string          `json:"transcript_path"`
-	CWD            string          `json:"cwd"`
-	PermissionMode string          `json:"permission_mode"`
-	HookEventName  string          `json:"hook_event_name"`
-	ToolName       string          `json:"tool_name"`
-	ToolUseID      string          `json:"tool_use_id"`
-	ToolInput      ToolInput       `json:"tool_input"`
-	ToolResponse   json.RawMessage `json:"tool_response"`
-	Prompt         string          `json:"prompt"`
-	Message        string          `json:"message"`           // Notification
-	Notification   string          `json:"notification_type"` // Notification
-}
-
-// ToolInput covers the Edit and Write tools.
-type ToolInput struct {
-	Command     string `json:"command"`     // Bash
-	Description string `json:"description"` // Bash, Agent
-	Pattern     string `json:"pattern"`     // Grep, Glob
-	URL         string `json:"url"`         // WebFetch
-	Query       string `json:"query"`       // WebSearch
-	FilePath    string `json:"file_path"`
-	OldString   string `json:"old_string"`
-	NewString   string `json:"new_string"`
-	ReplaceAll  bool   `json:"replace_all"`
-	Content     string `json:"content"`
-}
-
-// Parse decodes hook input. An empty stdin yields an empty Input, not an
-// error, so hooks can be run by hand.
-func Parse(r io.Reader) (*Input, error) {
-	var in Input
-	err := json.NewDecoder(r).Decode(&in)
-	if errors.Is(err, io.EOF) {
-		return &in, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &in, nil
-}
 
 // Nvim is the part of the Neovim client the hooks use.
 type Nvim interface {
@@ -81,156 +38,202 @@ type Handler struct {
 	Cfg    config.Config
 	Log    *events.Log
 	Nvim   Nvim
-	Stdout io.Writer // hook JSON output (UserPromptSubmit)
+	Agent  agent.Agent
+	Stdout io.Writer // hook JSON output (prompt)
 }
 
-// Run dispatches a hook by name. The hooks are registered for the whole
-// repository, so they also fire for a Claude Code started outside pair:
+// Run dispatches a hook by name. agentName says which agent wrote the
+// input; empty means the configured one. The hooks are registered for the
+// whole repository, so they also fire for an agent started outside pair:
 // then they do nothing, and that conversation leaves the session alone.
-func Run(name string, stdin io.Reader, stdout io.Writer) error {
+func Run(name, agentName string, stdin io.Reader, stdout io.Writer) error {
 	if !config.Active() {
 		_, _ = io.Copy(io.Discard, stdin)
 		return nil
 	}
-	in, err := Parse(stdin)
+	data, err := io.ReadAll(stdin)
+	if err != nil {
+		return err
+	}
+	cfg := config.Load(agent.PeekCWD(data))
+	if agentName == "" {
+		agentName = cfg.Agent
+	}
+	ag, err := agent.For(agentName)
+	if err != nil {
+		return err
+	}
+	ev, err := ag.ParseHook(name, data)
 	if err != nil {
 		return fmt.Errorf("parse hook input: %w", err)
 	}
-	cfg := config.Load(in.CWD)
-	session.NoteClaude(cfg.StateDir, in.SessionID)
-	h := &Handler{Cfg: cfg, Log: events.Open(cfg.StateDir), Nvim: nvim.New(cfg.Sock), Stdout: stdout}
-	switch name {
+	session.NoteConversation(cfg.StateDir, ev.Conversation)
+	h := &Handler{Cfg: cfg, Log: events.Open(cfg.StateDir), Nvim: nvim.New(cfg.Sock), Agent: ag, Stdout: stdout}
+	return h.Handle(ev)
+}
+
+// Handle runs the handler of the event's hook.
+func (h *Handler) Handle(ev *agent.Event) error {
+	switch ev.Hook {
 	case "pre_edit":
-		return h.PreEdit(in)
+		return h.PreEdit(ev)
 	case "post_edit":
-		return h.PostEdit(in)
+		return h.PostEdit(ev)
 	case "stop":
-		return h.Stop(in)
+		return h.Stop(ev)
 	case "prompt":
-		return h.Prompt(in)
+		return h.Prompt(ev)
 	case "notify":
-		return h.Notify(in)
+		return h.Notify(ev)
 	case "activity":
-		return h.Activity(in)
+		return h.Activity(ev)
 	default:
-		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify, activity)", name)
+		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify, activity)", ev.Hook)
 	}
 }
 
-// PreEdit points Neovim at the range Claude is about to change.
-func (h *Handler) PreEdit(in *Input) error {
-	file := h.absPath(in.ToolInput.FilePath)
-	if file == "" {
-		return nil
+// who is the agent's name in a sentence.
+func (h *Handler) who() string {
+	if h.Agent == nil {
+		return "Claude"
 	}
-	start, end, found := 1, 1, false
-	switch in.ToolName {
-	case "Edit":
-		data, err := os.ReadFile(file)
-		if err != nil {
-			_ = h.Log.Append("pre_edit", map[string]any{"tool": in.ToolName, "file": file, "error": err.Error()})
-			return nil
-		}
-		start, end, found = LocateRange(string(data), in.ToolInput.OldString)
-	case "Write":
-		if _, err := os.Stat(file); err != nil {
-			_ = h.Log.Append("pre_edit", map[string]any{"tool": in.ToolName, "file": file, "new": true})
-			_ = h.Log.Session("+ " + h.rel(file) + " (new file)")
-			return nil
-		}
-		found = true // the whole file is being rewritten: point at the top
-	default:
-		return nil
-	}
+	return h.Agent.Short()
+}
 
-	h.state(tmux.StateWorking, "editing "+h.rel(file))
-	ctx := context.Background()
-	shown, nvErr := h.Nvim.Show(ctx, file, start, end)
-	payload := map[string]any{"tool": in.ToolName, "file": file, "start": start, "end": end, "found": found}
-	if nvErr != nil {
-		payload["nvim_error"] = nvErr.Error()
-	} else {
-		payload["shown"] = shown
+// PreEdit points Neovim at the range the agent is about to change. When
+// one call changes several files, the first is pointed at and all are
+// logged.
+func (h *Handler) PreEdit(ev *agent.Event) error {
+	var nvErr error
+	pointed := false
+	for _, f := range ev.Files {
+		file := h.absPath(f.Path)
+		if file == "" {
+			continue
+		}
+		start, end, found := 1, 1, false
+		switch {
+		case f.Delete:
+			_ = h.Log.Append("pre_edit", map[string]any{"tool": ev.Tool, "file": file, "delete": true})
+			_ = h.Log.Session("− " + h.rel(file) + " (removed)")
+			continue
+		case f.Create || ev.Kind == agent.KindWrite:
+			if _, err := os.Stat(file); err != nil {
+				_ = h.Log.Append("pre_edit", map[string]any{"tool": ev.Tool, "file": file, "new": true})
+				_ = h.Log.Session("+ " + h.rel(file) + " (new file)")
+				continue
+			}
+			found = true // the whole file is being rewritten: point at the top
+		default:
+			data, err := os.ReadFile(file)
+			if err != nil {
+				_ = h.Log.Append("pre_edit", map[string]any{"tool": ev.Tool, "file": file, "error": err.Error()})
+				continue
+			}
+			start, end, found = LocateRange(string(data), f.Old)
+		}
+		if pointed {
+			_ = h.Log.Append("pre_edit", map[string]any{"tool": ev.Tool, "file": file, "start": start, "end": end, "found": found})
+			_ = h.Log.Session(fmt.Sprintf("→ %s:%d-%d", h.rel(file), start, end))
+			continue
+		}
+		pointed = true
+		h.state(tmux.StateWorking, "editing "+h.rel(file))
+		shown, err := h.Nvim.Show(context.Background(), file, start, end)
+		payload := map[string]any{"tool": ev.Tool, "file": file, "start": start, "end": end, "found": found}
+		if err != nil {
+			payload["nvim_error"] = err.Error()
+			nvErr = err
+		} else {
+			payload["shown"] = shown
+		}
+		_ = h.Log.Append("pre_edit", payload)
+		_ = h.Log.Session(fmt.Sprintf("→ %s:%d-%d", h.rel(file), start, end))
 	}
-	_ = h.Log.Append("pre_edit", payload)
-	_ = h.Log.Session(fmt.Sprintf("→ %s:%d-%d", h.rel(file), start, end))
 	return nvErr
 }
 
-// PostEdit reloads Neovim, draws the change inside the file, and writes
-// its summary and diff to the activity log.
-func (h *Handler) PostEdit(in *Input) error {
-	file := h.absPath(in.ToolInput.FilePath)
+// PostEdit reloads Neovim, draws the change inside each file, and writes
+// its summary to the activity log.
+func (h *Handler) PostEdit(ev *agent.Event) error {
 	ctx := context.Background()
 	nvErr := h.Nvim.Reload(ctx)
-	drawn := ""
-	var marks Marks
-	if file != "" {
-		marks = h.marks(ctx, in, file)
-	}
-	if file != "" && nvErr == nil && !marks.Empty() {
-		if data, err := json.Marshal(marks); err == nil {
-			if err := h.Nvim.Diff(ctx, file, string(data)); err != nil {
-				nvErr = err
-			} else {
-				drawn = marks.summary()
+	for _, f := range ev.Files {
+		file := h.absPath(f.Path)
+		if f.NewPath != "" {
+			file = h.absPath(f.NewPath)
+		}
+		if file == "" {
+			continue
+		}
+		if f.Delete {
+			h.state(tmux.StateWorking, "removed "+h.rel(file))
+			_ = h.Log.Session("− " + h.rel(file) + " (removed)")
+			_ = h.Log.Append("post_edit", map[string]any{"tool": ev.Tool, "file": file, "deleted": true})
+			continue
+		}
+		marks := h.marks(ctx, f, file)
+		drawn := ""
+		if nvErr == nil && !marks.Empty() {
+			if data, err := json.Marshal(marks); err == nil {
+				if err := h.Nvim.Diff(ctx, file, string(data)); err != nil {
+					nvErr = err
+				} else {
+					drawn = marks.summary()
+				}
 			}
 		}
-	}
-	added, removed := 0, 0
-	if file != "" {
 		h.state(tmux.StateWorking, "edited "+h.rel(file))
-		added, removed = marks.counts()
+		added, removed := marks.counts()
 		_ = h.Log.Session(fmt.Sprintf("✎ %s (+%d −%d)", h.rel(file), added, removed))
+		// Remember the file as the agent left it, so the next prompt can
+		// report only what the engineer changed on top.
+		if h.inside(file) {
+			st := loadState(h.Cfg.StateDir)
+			Snapshot(h.Cfg.StateDir, &st, file, h.withheld(ctx, file))
+			_ = saveState(h.Cfg.StateDir, st)
+		}
+		payload := map[string]any{"tool": ev.Tool, "file": file, "added": added, "removed": removed}
+		if drawn != "" {
+			payload["drawn"] = drawn
+		}
+		if nvErr != nil {
+			payload["nvim_error"] = nvErr.Error()
+		}
+		_ = h.Log.Append("post_edit", payload)
 	}
-	if file != "" {
-		// Remember the file as Claude left it, so the next prompt can report
-		// only what the engineer changed on top.
-		st := loadState(h.Cfg.StateDir)
-		Snapshot(h.Cfg.StateDir, &st, file)
-		_ = saveState(h.Cfg.StateDir, st)
-	}
-	payload := map[string]any{"tool": in.ToolName, "file": file, "added": added, "removed": removed}
-	if drawn != "" {
-		payload["drawn"] = drawn
-	}
-	if nvErr != nil {
-		payload["nvim_error"] = nvErr.Error()
-	}
-	_ = h.Log.Append("post_edit", payload)
 	return nvErr
 }
 
 // Stop logs the end of a turn, hands the turn to the engineer in the status
 // bar, and plays a chime without blocking.
-func (h *Handler) Stop(in *Input) error {
-	_ = h.Log.Append("stop", map[string]any{"session_id": in.SessionID})
+func (h *Handler) Stop(ev *agent.Event) error {
+	_ = h.Log.Append("stop", map[string]any{"session_id": ev.Conversation})
 	_ = h.Log.Session("■ turn ended, your turn")
 	h.state(tmux.StateIdle, "")
 	chime("Glass")
 	return nil
 }
 
-// Notify handles Claude Code's notifications. A permission prompt is easy
-// to miss when nobody watches Claude's pane, so it raises the status bar
-// alert and a sound; an idle reminder just marks the turn as the
+// Notify handles the agent's notifications. A permission prompt is easy
+// to miss when nobody watches the agent's pane, so it raises the status
+// bar alert and a sound; an idle reminder just marks the turn as the
 // engineer's.
-func (h *Handler) Notify(in *Input) error {
-	msg := strings.TrimSpace(in.Message)
-	idle := in.Notification == "idle_prompt" || strings.Contains(strings.ToLower(msg), "waiting for your input")
-	_ = h.Log.Append("notify", map[string]any{"message": msg, "kind": in.Notification})
-	if idle {
+func (h *Handler) Notify(ev *agent.Event) error {
+	msg := strings.TrimSpace(ev.Message)
+	_ = h.Log.Append("notify", map[string]any{"message": msg, "idle": ev.Idle})
+	if ev.Idle {
 		h.state(tmux.StateIdle, "")
 		return nil
 	}
-	_ = h.Log.Session("⚠ Claude needs you: " + msg)
+	_ = h.Log.Session("⚠ " + h.who() + " needs you: " + msg)
 	status.Set(h.Cfg, tmux.StateAttention, msg)
-	// Claude's pane is hidden: bring it in so the prompt can be read and
-	// answered. It goes away again on the next sign of activity, unless the
-	// engineer had opened it themselves.
-	if h.Cfg.Session != "" && !tmux.ClaudeVisible(h.Cfg.Session) {
-		if err := tmux.ShowClaude(h.Cfg.Session, h.Cfg.ClaudeHeight); err == nil {
-			_ = os.WriteFile(h.autoShown(), nil, 0o644)
+	// The agent's pane is hidden: bring it in so the prompt can be read
+	// and answered. It goes away again on the next sign of activity,
+	// unless the engineer had opened it themselves.
+	if h.Cfg.Session != "" && !tmux.AgentVisible(h.Cfg.Session) {
+		if err := tmux.ShowAgent(h.Cfg.Session, h.Cfg.ClaudeHeight); err == nil {
+			_ = os.WriteFile(h.autoShown(), nil, 0o600)
 		}
 	}
 	chime("Funk")
@@ -238,31 +241,34 @@ func (h *Handler) Notify(in *Input) error {
 }
 
 // Activity runs before every tool call and keeps the status bar saying
-// what Claude is doing. It writes nothing to the log.
-func (h *Handler) Activity(in *Input) error {
+// what the agent is doing. It writes nothing to the log.
+func (h *Handler) Activity(ev *agent.Event) error {
 	detail := ""
-	ti := in.ToolInput
-	switch {
-	case strings.HasPrefix(in.ToolName, "mcp__pair__"):
+	switch ev.Kind {
+	case agent.KindPair:
 		return nil // narrate, show and ask report their own state
-	case in.ToolName == "Read":
-		detail = "reading " + h.rel(h.absPath(ti.FilePath))
-	case in.ToolName == "Edit" || in.ToolName == "Write":
-		detail = "editing " + h.rel(h.absPath(ti.FilePath))
-	case in.ToolName == "Bash":
-		detail = "running " + firstNonEmpty(ti.Description, ti.Command)
-	case in.ToolName == "Grep" || in.ToolName == "Glob":
-		detail = "searching " + ti.Pattern
-	case in.ToolName == "WebFetch" || in.ToolName == "WebSearch":
-		detail = "looking up " + firstNonEmpty(ti.URL, ti.Query)
-	case in.ToolName == "Agent" || in.ToolName == "Task":
-		detail = "delegating " + ti.Description
-	case strings.HasPrefix(in.ToolName, "mcp__"):
-		detail = "using " + strings.TrimPrefix(in.ToolName, "mcp__")
+	case agent.KindRead:
+		detail = "reading " + h.rel(h.absPath(ev.Detail))
+	case agent.KindEdit, agent.KindWrite:
+		names := make([]string, 0, len(ev.Files))
+		for _, f := range ev.Files {
+			names = append(names, h.rel(h.absPath(f.Path)))
+		}
+		detail = "editing " + strings.Join(names, ", ")
+	case agent.KindShell:
+		detail = "running " + ev.Detail
+	case agent.KindSearch:
+		detail = "searching " + ev.Detail
+	case agent.KindWeb:
+		detail = "looking up " + ev.Detail
+	case agent.KindDelegate:
+		detail = "delegating " + ev.Detail
+	case agent.KindMCP:
+		detail = "using " + ev.Detail
 	default:
-		detail = strings.ToLower(in.ToolName)
+		detail = firstNonEmpty(ev.Detail, strings.ToLower(ev.Tool))
 	}
-	h.state(tmux.StateWorking, detail)
+	h.state(tmux.StateWorking, strings.TrimSpace(detail))
 	return nil
 }
 
@@ -274,28 +280,28 @@ func firstNonEmpty(a, b string) string {
 }
 
 // state records what is happening and gives the screen back to the editor
-// once Claude no longer waits on the engineer.
+// once the agent no longer waits on the engineer.
 func (h *Handler) state(kind, detail string) {
 	status.Set(h.Cfg, kind, detail)
 	h.hideIfAutoShown()
 }
 
-// startTurn is state(working) at the beginning of a turn of Claude's.
+// startTurn is state(working) at the beginning of a turn of the agent's.
 func (h *Handler) startTurn() {
 	status.StartTurn(h.Cfg)
 	h.hideIfAutoShown()
 }
 
-// hideIfAutoShown hides Claude's pane when pair itself had opened it for a
-// permission prompt.
+// hideIfAutoShown hides the agent's pane when pair itself had opened it
+// for a permission prompt.
 func (h *Handler) hideIfAutoShown() {
 	if _, err := os.Stat(h.autoShown()); err == nil {
 		_ = os.Remove(h.autoShown())
-		_ = tmux.HideClaude(h.Cfg.Session)
+		_ = tmux.HideAgent(h.Cfg.Session)
 	}
 }
 
-// autoShown marks that Claude's pane was opened by pair, not by the
+// autoShown marks that the agent's pane was opened by pair, not by the
 // engineer.
 func (h *Handler) autoShown() string { return filepath.Join(h.Cfg.StateDir, "claude_autoshown") }
 

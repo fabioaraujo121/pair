@@ -15,7 +15,7 @@ func NewSpeaker(cfg config.Config) (Speaker, error) {
 	}
 	switch cfg.TTS {
 	case "", "say":
-		return &Say{Voice: cfg.Voice, Rate: cfg.Rate, StateDir: cfg.StateDir}, nil
+		return &Say{Voice: cfg.Voice, Rate: cfg.Rate, RunDir: cfg.RunDir}, nil
 	case "kokoro":
 		return NewKokoro(cfg), nil
 	case "silent", "none":

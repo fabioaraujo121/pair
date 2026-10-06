@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
 	"github.com/fabioaraujo121/pair/internal/hook"
@@ -20,17 +21,17 @@ import (
 
 // Start creates the tmux session or attaches to it when it already exists.
 //
-// The screen answers three questions: is Claude running (the presence
+// The screen answers three questions: is the agent running (the presence
 // animation, the status bar and the colour of the borders), which files is
-// it changing (Neovim, the main area) and why (the activity column).
-// Claude Code itself runs in a background window: F7 or the `claude`
-// button brings its pane under the editor and sends it away again.
+// it changing (Neovim, the main area) and why (the activity column). The
+// agent itself runs in a background window: F7 or the button with its
+// name brings its pane under the editor and sends it away again.
 //
 //	┌──────────────────────────────┬──────────────────┐
 //	│ neovim: tree | editor        │ presence         │
 //	│              | PAIRING.md    ├──────────────────┤
 //	│                              │ activity         │
-//	│ (claude, when shown)         │                  │
+//	│ (the agent, when shown)      │                  │
 //	└──────────────────────────────┴──────────────────┘
 func Start(args []string) error {
 	opts, err := parseStart(args)
@@ -38,10 +39,22 @@ func Start(args []string) error {
 		return err
 	}
 	cfg := config.Load("")
-	for _, bin := range []string{"tmux", "nvim", "claude"} {
+	if opts.agent != "" {
+		cfg.Agent = opts.agent
+	}
+	ag, err := agent.For(cfg.Agent)
+	if err != nil {
+		return err
+	}
+	for _, bin := range []string{"tmux", "nvim", ag.Binary()} {
 		if _, err := exec.LookPath(bin); err != nil {
 			return fmt.Errorf("%s is not on PATH; run `pair doctor`", bin)
 		}
+	}
+	// Without its hooks the agent works unseen: the status bar never
+	// moves and nothing is drawn. Better to say so than to start.
+	if ok, why := ag.Installed(cfg.Root); !ok {
+		return fmt.Errorf("%s is not set up for pairing in %s (%s): run `pair init --agent %s` first", ag.Title(), tildePath(cfg.Root), why, ag.Name())
 	}
 	if config.SockTooLong(cfg.Sock) {
 		return fmt.Errorf("PAIR_SOCK is %d bytes; macOS allows %d. Use a shorter path or 127.0.0.1:<port>", len(cfg.Sock), config.MaxSockPath)
@@ -62,21 +75,32 @@ func Start(args []string) error {
 	if err != nil {
 		return err
 	}
+	// A continued session goes on with the agent that held its
+	// conversation, unless asked otherwise.
+	if continued && meta.Agent != "" && opts.agent == "" && meta.Agent != cfg.Agent {
+		if a, err := agent.For(meta.Agent); err == nil {
+			cfg.Agent, ag = meta.Agent, a
+		}
+	}
+	if meta.Agent != ag.Name() {
+		meta.Agent = ag.Name()
+		_ = session.Save(cfg.StateDir, meta)
+	}
 	log := events.Open(cfg.StateDir)
-	if f, err := os.OpenFile(log.SessionLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+	if f, err := os.OpenFile(log.SessionLogPath(), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
 		_ = f.Close()
 	}
 	if !continued {
 		hook.ResetState(cfg.StateDir) // fresh baseline for hand-edit detection
 	}
-	if err := createSession(cfg, pluginDir, log, claudeArgs(cfg, meta, continued)); err != nil {
+	if err := createSession(cfg, ag, pluginDir, log, agentArgs(cfg, ag, meta, continued)); err != nil {
 		return err
 	}
 	kind, word := "session_start", "started"
 	if continued {
 		kind, word = "session_continue", "continued"
 	}
-	_ = log.Append(kind, map[string]any{"root": cfg.Root, "id": meta.ID, "name": meta.Label()})
+	_ = log.Append(kind, map[string]any{"root": cfg.Root, "id": meta.ID, "name": meta.Label(), "agent": ag.Name()})
 	_ = log.Session(fmt.Sprintf("● pair session %s %s in %s", meta.Label(), word, tildePath(cfg.Root)))
 	return attach(cfg.Session)
 }
@@ -86,6 +110,7 @@ type startOptions struct {
 	name      string // --name: the name of the new session
 	resume    string // --resume <id or name>, or "last" for --continue
 	continue_ bool
+	agent     string // --agent: the coding agent for this session
 }
 
 func parseStart(args []string) (startOptions, error) {
@@ -106,8 +131,12 @@ func parseStart(args []string) (startOptions, error) {
 			o.name, err = value(a)
 		case "-r", "--resume":
 			o.resume, err = value(a)
+		case "-a", "--agent":
+			if o.agent, err = value(a); err == nil && !agent.Known(o.agent) {
+				err = fmt.Errorf("unknown agent %q (one of %s)", o.agent, strings.Join(agent.Names(), ", "))
+			}
 		default:
-			err = fmt.Errorf("unknown option %q (usage: pair [--continue] [--name <name>] [--resume <id or name>])", a)
+			err = fmt.Errorf("unknown option %q (usage: pair [--continue] [--name <name>] [--resume <id or name>] [--agent claude|codex])", a)
 		}
 		if err != nil {
 			return o, err
@@ -142,23 +171,26 @@ func openSession(cfg config.Config, o startOptions) (session.Meta, bool, error) 
 	return m, true, nil
 }
 
-// claudeArgs builds the arguments of the claude command: the conversation
+// agentArgs builds the arguments of the agent's command: the conversation
 // to resume when the session is continued, the session's name, and what
 // the engineer configured.
-func claudeArgs(cfg config.Config, m session.Meta, continued bool) string {
-	var parts []string
+func agentArgs(cfg config.Config, ag agent.Agent, m session.Meta, continued bool) string {
+	o := agent.Launch{Name: m.Name}
 	if continued {
-		if m.ClaudeSession != "" {
-			parts = append(parts, "--resume", shellQuote(m.ClaudeSession))
+		// The id comes from a file in the repository: it is used only
+		// when it has the shape of one.
+		if ag.ConversationID(m.Conversation) {
+			o.Resume = m.Conversation
 		} else {
-			parts = append(parts, "--continue")
+			o.Continue = true
 		}
 	}
-	if m.Name != "" {
-		parts = append(parts, "--name", shellQuote(m.Name))
+	parts := make([]string, 0, 4)
+	for _, a := range ag.Launch(o) {
+		parts = append(parts, shellQuote(a))
 	}
 	if cfg.ClaudeArgs != "" {
-		parts = append(parts, cfg.ClaudeArgs)
+		parts = append(parts, cfg.ClaudeArgs) // the engineer's own, from the environment or ~/.pair/config
 	}
 	if len(parts) == 0 {
 		return ""
@@ -166,10 +198,9 @@ func claudeArgs(cfg config.Config, m session.Meta, continued bool) string {
 	return " " + strings.Join(parts, " ")
 }
 
-func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeArguments string) error {
-	if !config.IsTCP(cfg.Sock) {
-		_ = os.Remove(cfg.Sock) // stale socket from a previous session
-	}
+func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *events.Log, agentArguments string) error {
+	removeSocket(cfg.Sock) // stale, from a previous session
+	_ = os.RemoveAll(cfg.RunDir)
 	s := cfg.Session
 	exe, _ := os.Executable()
 	cols, lines := terminalSize()
@@ -178,12 +209,16 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 		return err
 	}
 
-	// The session environment reaches every pane, so `claude` is started by
-	// name and any shell wrapper the user has around it still applies.
-	editor, err := tmuxRun("new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", tmux.MainWindow,
+	// The session environment reaches every pane, so the agent is started
+	// by name and any shell wrapper the user has around it still applies.
+	newSession := []string{"new-session", "-d", "-P", "-F", "#{pane_id}", "-s", s, "-n", tmux.MainWindow,
 		"-x", cols, "-y", lines, "-c", cfg.Root,
-		"-e", "PAIR_SOCK="+cfg.Sock, "-e", "PAIR_ROOT="+cfg.Root, "-e", "PAIR_SESSION="+s, "-e", "PAIR_ACTIVE=1",
-		"-e", "PAIR_TMUX_SOCKET="+tmux.Socket, "-e", "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0")
+		"-e", "PAIR_SOCK=" + cfg.Sock, "-e", "PAIR_ROOT=" + cfg.Root, "-e", "PAIR_SESSION=" + s, "-e", "PAIR_ACTIVE=1",
+		"-e", "PAIR_TMUX_SOCKET=" + tmux.Socket, "-e", "PAIR_AGENT=" + ag.Name()}
+	for _, kv := range ag.Env() {
+		newSession = append(newSession, "-e", kv)
+	}
+	editor, err := tmuxRun(newSession...)
 	if err != nil {
 		return err
 	}
@@ -196,23 +231,24 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 	if err != nil {
 		return fail(err)
 	}
-	// Claude Code lives in a window of its own, in the background.
-	claude, err := tmuxRun("new-window", "-d", "-P", "-F", "#{pane_id}", "-n", "claude", "-t", "="+s+":", "-c", cfg.Root)
+	// The agent lives in a window of its own, in the background.
+	agentPane, err := tmuxRun("new-window", "-d", "-P", "-F", "#{pane_id}", "-n", tmux.AgentWindow, "-t", "="+s+":", "-c", cfg.Root)
 	if err != nil {
 		return fail(err)
 	}
 
+	who := ag.Short()
 	steps := [][]string{
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_NVIM", editor},
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_LOG", logPane},
 		{"set-environment", "-t", "=" + s, "PAIR_PANE_PRESENCE", presencePane},
-		{"set-environment", "-t", "=" + s, "PAIR_PANE_CLAUDE", claude},
-		{"set-option", "-p", "-t", editor, "@pair_name", "files: what Claude reads and changes"},
-		{"set-option", "-p", "-t", presencePane, "@pair_name", "claude"},
-		{"set-option", "-p", "-t", logPane, "@pair_name", "activity: what Claude does and why"},
-		{"set-option", "-p", "-t", claude, "@pair_name", "claude code: type here · F7 hides this pane"},
+		{"set-environment", "-t", "=" + s, "PAIR_PANE_" + tmux.RoleAgent, agentPane},
+		{"set-option", "-p", "-t", editor, "@pair_name", "files: what " + who + " reads and changes"},
+		{"set-option", "-p", "-t", presencePane, "@pair_name", strings.ToLower(who)},
+		{"set-option", "-p", "-t", logPane, "@pair_name", "activity: what " + who + " does and why"},
+		{"set-option", "-p", "-t", agentPane, "@pair_name", strings.ToLower(ag.Title()) + ": type here · F7 hides this pane"},
 	}
-	steps = append(steps, sessionChrome(exe)...)
+	steps = append(steps, sessionChrome(exe, who)...)
 	for _, args := range steps {
 		if _, err := tmuxRun(args...); err != nil {
 			return fail(err)
@@ -220,19 +256,19 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 	}
 	status.Set(cfg, tmux.StateIdle, "")
 
-	nvimCmd := "clear; nvim --cmd " + shellQuote("set rtp^="+pluginDir) +
-		" --cmd " + shellQuote("let g:pair_bin='"+exe+"' | let g:pair_root='"+cfg.Root+"'") +
+	nvimCmd := "clear; nvim --cmd " + shellQuote("set rtp^="+vimOption(pluginDir)) +
+		" --cmd " + shellQuote("let g:pair_bin="+vimString(exe)+" | let g:pair_root="+vimString(cfg.Root)) +
 		" --listen " + shellQuote(cfg.Sock) +
 		" -c " + shellQuote("lua require('pair').layout()")
 	tailCmd := "clear; " + shellQuote(exe) + " log --follow"
 	presenceCmd := "clear; " + shellQuote(exe) + " presence"
-	claudeCmd := "clear; claude" + claudeArguments
+	agentCmd := "clear; " + ag.Binary() + agentArguments
 
 	keys := [][]string{
 		{"send-keys", "-t", editor, nvimCmd, "Enter"},
 		{"send-keys", "-t", logPane, tailCmd, "Enter"},
 		{"send-keys", "-t", presencePane, presenceCmd, "Enter"},
-		{"send-keys", "-t", claude, claudeCmd, "Enter"},
+		{"send-keys", "-t", agentPane, agentCmd, "Enter"},
 		{"select-pane", "-t", editor},
 	}
 	for _, args := range keys {
@@ -241,26 +277,26 @@ func createSession(cfg config.Config, pluginDir string, log *events.Log, claudeA
 		}
 	}
 	if cfg.ClaudeShown {
-		return tmux.ShowClaude(s, cfg.ClaudeHeight)
+		return tmux.ShowAgent(s, cfg.ClaudeHeight)
 	}
-	// A repository opened for the first time makes Claude Code ask whether
+	// A repository opened for the first time makes the agent ask whether
 	// the folder is trusted, before any hook runs. Look once it has had
 	// time to start, and open its pane if it is waiting.
-	_, _ = tmuxRun("run-shell", "-b", "-d", "5", shellQuote(exe)+" claude --if-waiting >/dev/null 2>&1")
+	_, _ = tmuxRun("run-shell", "-b", "-d", "5", shellQuote(exe)+" agent --if-waiting >/dev/null 2>&1")
 	return nil
 }
 
 // sessionChrome returns the options and key bindings of pair's tmux server:
 // mouse, labelled panes, a status line with the current state and the keys.
 // They are global to the server, which is pair's own.
-func sessionChrome(exe string) [][]string {
+func sessionChrome(exe, who string) [][]string {
 	// The bindings belong to the server, which may hold the sessions of
 	// several repositories: each command is told which session the key was
 	// pressed in. tmux expands #{session_name} when the key is pressed.
 	in := "PAIR_SESSION=#{session_name} " + shellQuote(exe)
 	listen := in + " hook listen >/dev/null 2>&1"
 	interrupt := in + " hook interrupt >/dev/null 2>&1"
-	toggle := in + " claude >/dev/null 2>&1"
+	toggle := in + " agent >/dev/null 2>&1"
 	return [][]string{
 		{"set-option", "-g", "mouse", "on"},
 		// Full colour for Neovim's syntax highlighting.
@@ -277,7 +313,7 @@ func sessionChrome(exe string) [][]string {
 		// Buttons: clicking one runs `pair hook click <name>`.
 		{"set-option", "-g", "status-right", "#[range=user|talk]#{?#{==:#{@pair_mic},on},#[fg=white#,bg=red#,bold] ■ stop F5 ,#[fg=black#,bg=white] 🎙 talk F5 }#[default]#[norange] " +
 			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
-			"#[range=user|claude]#[fg=black,bg=white] ⌨ claude F7 #[default]#[norange] "},
+			"#[range=user|agent]#[fg=black,bg=white] ⌨ " + strings.ToLower(who) + " F7 #[default]#[norange] "},
 		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", in + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
@@ -286,7 +322,7 @@ func sessionChrome(exe string) [][]string {
 		{"bind-key", "-n", "F6", "run-shell", "-b", interrupt},
 		{"bind-key", "t", "run-shell", "-b", listen},
 		{"bind-key", "i", "run-shell", "-b", interrupt},
-		// F7 shows Claude Code's pane under the editor and hides it again.
+		// F7 shows the agent's pane under the editor and hides it again.
 		{"bind-key", "-n", "F7", "run-shell", "-b", toggle},
 		{"bind-key", "c", "run-shell", "-b", toggle},
 	}
@@ -326,8 +362,8 @@ func Stop() error {
 		if _, err := tmuxRun("kill-session", "-t", "="+cfg.Session); err != nil {
 			return err
 		}
-		speech.KillSpeech(cfg.StateDir)
-		speech.KillRecording(cfg.StateDir)
+		speech.KillSpeech(cfg.RunDir)
+		speech.KillRecording(cfg.RunDir)
 	case stopLegacySession("pair"):
 		fmt.Println("stopped a session created by an earlier version of pair")
 	default:
@@ -337,9 +373,7 @@ func Stop() error {
 		}
 		return nil
 	}
-	if !config.IsTCP(cfg.Sock) {
-		_ = os.Remove(cfg.Sock)
-	}
+	removeSocket(cfg.Sock)
 	session.End(cfg.StateDir, time.Now())
 	_ = events.Open(cfg.StateDir).Session("○ pair session stopped")
 	if m, ok := session.Current(cfg.StateDir); ok {
@@ -357,6 +391,26 @@ func stopLegacySession(session string) bool {
 		return false
 	}
 	return exec.Command("tmux", "kill-session", "-t", "="+session).Run() == nil
+}
+
+// removeSocket removes a unix socket, and nothing that is not one.
+func removeSocket(path string) {
+	if config.IsTCP(path) {
+		return
+	}
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
+		_ = os.Remove(path)
+	}
+}
+
+// vimString quotes s as a Vim single-quoted string.
+func vimString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+// vimOption escapes a path for a comma-separated Vim option given to :set.
+func vimOption(path string) string {
+	return strings.NewReplacer(`\`, `\\`, " ", `\ `, ",", `\,`, "|", `\|`).Replace(path)
 }
 
 // tildePath abbreviates the home directory for display.

@@ -24,7 +24,7 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "space", function()
   run({ "hook", "listen" }, "listening…")
 end)
 
--- ctrl+alt+cmd+escape: interrupt Claude, then listen
+-- ctrl+alt+cmd+escape: interrupt the agent, then listen
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "escape", function()
   run({ "hook", "interrupt" }, "interrupting…")
 end)

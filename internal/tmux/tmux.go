@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+	"unicode"
 )
 
 // Socket is the name of pair's tmux server socket (PAIR_TMUX_SOCKET).
@@ -67,8 +69,10 @@ func Environment(session, name string) string {
 
 // Pane roles, stored as PAIR_PANE_<role> in the session environment when the
 // session is created. Pane indexes depend on the layout; pane ids do not.
+// The agent's role keeps the name it had when Claude Code was the only
+// agent, so sessions already running are still found.
 const (
-	RoleClaude   = "CLAUDE"
+	RoleAgent    = "CLAUDE"
 	RoleEditor   = "NVIM"
 	RoleLog      = "LOG"
 	RolePresence = "PRESENCE"
@@ -80,7 +84,7 @@ func Pane(session, role string) string {
 		return id
 	}
 	switch role { // sessions created before panes were tracked by id
-	case RoleClaude:
+	case RoleAgent:
 		return session + ":0.0"
 	case RoleEditor:
 		return session + ":0.1"
@@ -89,15 +93,17 @@ func Pane(session, role string) string {
 	}
 }
 
-// ClaudePane is the target of the pane running Claude Code.
-func ClaudePane(session string) string { return Pane(session, RoleClaude) }
+// AgentPane is the target of the pane running the agent.
+func AgentPane(session string) string { return Pane(session, RoleAgent) }
 
 // Message flashes a line in the session's status bar for a few seconds.
 func Message(session, text string) {
 	if session == "" {
 		return
 	}
-	_, _ = Run("display-message", "-t", Pane(session, RoleEditor), "-d", "3000", text)
+	// -l: a transcript is text. Without it tmux reads "#{...}" and "#(...)"
+	// in what someone said as a format.
+	_, _ = Run("display-message", "-l", "-t", Pane(session, RoleEditor), "-d", "3000", oneLine(text))
 }
 
 // States shown in the status bar, so a glance tells what is going on.
@@ -110,24 +116,28 @@ const (
 	StateAttention = "attention"
 )
 
-// RenderState returns the styled status text for a state.
-func RenderState(state, detail string) string {
-	style, text := "fg=black,bg=yellow", "● Claude is working"
+// RenderState returns the styled status text for a state. who is the
+// agent's name in the sentence.
+func RenderState(state, detail, who string) string {
+	if who == "" {
+		who = "Claude"
+	}
+	style, text := "fg=black,bg=yellow", "● "+who+" is working"
 	switch state {
 	case StateIdle:
 		style, text = "fg=black,bg=green", "○ your turn: F5 to talk"
 	case StateSpeaking:
-		style, text = "fg=black,bg=cyan", "🗣 Claude is speaking"
+		style, text = "fg=black,bg=cyan", "🗣 "+who+" is speaking"
 	case StateAsking:
-		style, text = "fg=white,bg=magenta", "❓ Claude is asking you"
+		style, text = "fg=white,bg=magenta", "❓ "+who+" is asking you"
 	case StateListening:
 		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause or press F5"
 	case StateAttention:
-		style, text = "fg=white,bg=red", "⚠ Claude needs you"
+		style, text = "fg=white,bg=red", "⚠ "+who+" needs you"
 	}
-	if detail = strings.TrimSpace(detail); detail != "" {
-		if len(detail) > 60 {
-			detail = detail[:57] + "…"
+	if detail = oneLine(detail); detail != "" {
+		if r := []rune(detail); len(r) > 60 {
+			detail = string(r[:57]) + "…"
 		}
 		text += ": " + strings.ReplaceAll(detail, "#", "##")
 	}
@@ -155,7 +165,7 @@ func StateColour(state string) string {
 // border with the colour of the state, so the state is visible from
 // anywhere on the screen. It is a no-op without a session name, so code
 // running outside a pair session never touches tmux.
-func SetState(session, state, detail string) {
+func SetState(session, state, detail, who string) {
 	if session == "" {
 		return
 	}
@@ -166,7 +176,7 @@ func SetState(session, state, detail string) {
 		mic = "on"
 	}
 	_, _ = Run(
-		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail), ";",
+		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail, who), ";",
 		"set-option", "-t", "="+session+":", "@pair_mic", mic, ";",
 		"set-option", "-w", "-t", window, "pane-border-style", "fg="+colour, ";",
 		"set-option", "-w", "-t", window, "pane-active-border-style", "fg="+colour+",bold",
@@ -214,88 +224,112 @@ func Sessions() map[string]string {
 	return found
 }
 
-// Claude Code's pane is hidden by default: it lives in a background window
+// The agent's pane is hidden by default: it lives in a background window
 // and is brought into the main window, under the editor, on demand.
 
-// ClaudeVisible reports whether Claude's pane is in the main window.
-func ClaudeVisible(session string) bool {
+// AgentVisible reports whether the agent's pane is in the main window.
+func AgentVisible(session string) bool {
 	if session == "" {
 		return false
 	}
-	claude, err := Run("display-message", "-p", "-t", ClaudePane(session), "#{window_id}")
+	pane, err := Run("display-message", "-p", "-t", AgentPane(session), "#{window_id}")
 	if err != nil {
 		return false
 	}
 	main, err := Run("display-message", "-p", "-t", Pane(session, RoleEditor), "#{window_id}")
-	return err == nil && claude == main
+	return err == nil && pane == main
 }
 
-// ShowClaude brings Claude's pane under the editor, with the keyboard in
+// ShowAgent brings the agent's pane under the editor, with the keyboard in
 // it.
-func ShowClaude(session, height string) error {
-	if session == "" || ClaudeVisible(session) {
+func ShowAgent(session, height string) error {
+	if session == "" || AgentVisible(session) {
 		return nil
 	}
 	if height == "" {
 		height = "45%"
 	}
-	claude := ClaudePane(session)
-	if _, err := Run("join-pane", "-v", "-l", height, "-s", claude, "-t", Pane(session, RoleEditor)); err != nil {
+	pane := AgentPane(session)
+	if _, err := Run("join-pane", "-v", "-l", height, "-s", pane, "-t", Pane(session, RoleEditor)); err != nil {
 		return err
 	}
-	_, err := Run("select-pane", "-t", claude)
+	_, err := Run("select-pane", "-t", pane)
 	return err
 }
 
-// HideClaude sends Claude's pane back to its background window. Claude Code
-// keeps running there.
-func HideClaude(session string) error {
-	if session == "" || !ClaudeVisible(session) {
+// HideAgent sends the agent's pane back to its background window. The
+// agent keeps running there.
+func HideAgent(session string) error {
+	if session == "" || !AgentVisible(session) {
 		return nil
 	}
-	if _, err := Run("break-pane", "-d", "-s", ClaudePane(session), "-n", "claude"); err != nil {
+	if _, err := Run("break-pane", "-d", "-s", AgentPane(session), "-n", AgentWindow); err != nil {
 		return err
 	}
 	_, err := Run("select-pane", "-t", Pane(session, RoleEditor))
 	return err
 }
 
-// ToggleClaude shows Claude's pane when it is hidden and hides it when it
-// is shown. It reports whether the pane is visible afterwards.
-func ToggleClaude(session, height string) (bool, error) {
-	if ClaudeVisible(session) {
-		return false, HideClaude(session)
+// AgentWindow is the name of the background window that holds the agent.
+const AgentWindow = "claude"
+
+// ToggleAgent shows the agent's pane when it is hidden and hides it when
+// it is shown. It reports whether the pane is visible afterwards.
+func ToggleAgent(session, height string) (bool, error) {
+	if AgentVisible(session) {
+		return false, HideAgent(session)
 	}
-	return true, ShowClaude(session, height)
+	return true, ShowAgent(session, height)
 }
 
-// SendText types text into the Claude Code pane in literal mode (key names
+// SendText types text into the agent's pane in literal mode (key names
 // and a leading dash in the text are not interpreted) and submits it when
-// submit is true; Enter goes in a second call, as validated.
-func SendText(session, text string, submit bool) error {
+// submit is true; Enter goes in a second call, as validated, after the
+// pause the agent needs to see the text as typed rather than pasted.
+func SendText(session, text string, submit bool, settle time.Duration) error {
 	if strings.TrimSpace(text) == "" || session == "" {
 		return nil
 	}
-	pane := ClaudePane(session)
+	pane := AgentPane(session)
 	if _, err := Run("send-keys", "-t", pane, "-l", "--", text); err != nil {
 		return err
 	}
 	if !submit {
 		return nil
 	}
+	if settle > 0 {
+		time.Sleep(settle)
+	}
 	_, err := Run("send-keys", "-t", pane, "Enter")
 	return err
 }
 
 // SendPrompt types text and submits it.
-func SendPrompt(session, text string) error { return SendText(session, text, true) }
+func SendPrompt(session, text string, settle time.Duration) error {
+	return SendText(session, text, true, settle)
+}
 
-// SendEscape interrupts the running Claude Code turn. Escape, never C-c: a
-// double C-c would exit Claude Code.
-func SendEscape(session string) error {
-	if session == "" {
+// SendKeys presses keys, by their tmux names, in the agent's pane: the
+// ones its adapter says interrupt a turn.
+func SendKeys(session string, keys ...string) error {
+	if session == "" || len(keys) == 0 {
 		return nil
 	}
-	_, err := Run("send-keys", "-t", ClaudePane(session), "Escape")
+	_, err := Run(append([]string{"send-keys", "-t", AgentPane(session)}, keys...)...)
 	return err
+}
+
+// oneLine makes text fit for a status bar: one line, no control
+// characters.
+func oneLine(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == '\r' {
+			return ' '
+		}
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
 }
