@@ -69,6 +69,7 @@ With Homebrew:
 
 ```sh
 brew tap fabioaraujo121/tap
+brew trust fabioaraujo121/tap             # Homebrew asks this once of any third-party tap
 brew install --cask pair                  # pulls tmux, neovim, sox, whisper.cpp
 ```
 
@@ -484,7 +485,9 @@ git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The binary is not notarized; the cask strips the quarantine attribute after
-install. To rehearse a release without publishing anything:
+install, through a `postflight` block that Homebrew 7 reports as deprecated
+but still runs (goreleaser 2.18 writes no other form yet). To rehearse a
+release without publishing anything:
 
 ```sh
 RELEASE_GITHUB_TOKEN=x goreleaser release --snapshot --clean --skip=publish
