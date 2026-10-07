@@ -1,0 +1,31 @@
+name: site
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The site is served by GitHub Pages from the public releases
+      # repository (branch gh-pages), with the same token the releases use.
+      - name: Publish site/ to fabioaraujo121/pair-releases
+        env:
+          TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+        run: |
+          set -eu
+          cd site
+          rm -rf .git
+          git init -q -b gh-pages
+          git config user.name "pair"
+          git config user.email "pair@users.noreply.github.com"
+          touch .nojekyll
+          git add -A
+          git commit -q -m "site from ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${TOKEN}@github.com/fabioaraujo121/pair-releases.git" gh-pages
