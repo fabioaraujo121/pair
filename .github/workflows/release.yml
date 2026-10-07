@@ -32,3 +32,6 @@ jobs:
           # and nothing on this repository: the release and the cask go
           # there, the source stays here.
           RELEASE_GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+          # goreleaser refuses to start without this name, whatever the
+          # release and cask tokens say: the same token.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
