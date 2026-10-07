@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
+	pair "github.com/fabioaraujo121/pair"
 	"github.com/fabioaraujo121/pair/internal/config"
+	"github.com/fabioaraujo121/pair/internal/fetch"
 	"github.com/fabioaraujo121/pair/internal/speech"
 )
-
-const kokoroFiles = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/"
 
 // Voice is `pair voice`: which voice speaks, and how to get a better one.
 func Voice(args []string, w io.Writer) error {
@@ -90,19 +90,27 @@ func setupKokoro(w io.Writer) error {
 			return err
 		}
 	}
-	if err := run("installing kokoro-onnx", uv, "pip", "install", "--quiet", "--python", python, "kokoro-onnx", "soundfile"); err != nil {
+	// The packages are pinned with the hashes of their wheels: what gets
+	// installed is what was tested, whatever the index serves today.
+	requirements := filepath.Join(dir, "requirements.txt")
+	if err := os.WriteFile(requirements, []byte(pair.KokoroRequirements), 0o644); err != nil {
+		return err
+	}
+	if err := run("installing kokoro-onnx (pinned)", uv, "pip", "install", "--quiet", "--python", python, "--require-hashes", "-r", requirements); err != nil {
 		return err
 	}
 	for _, f := range []string{cfg.KokoroModel, "voices-v1.0.bin"} {
+		pin, err := fetch.Find(fetch.Kokoro, f)
+		if err != nil {
+			return fmt.Errorf("%w: put the file in %s yourself, or use one of the pinned models", err, dir)
+		}
 		path := filepath.Join(dir, f)
-		if fi, err := os.Stat(path); err == nil && fi.Size() > 1<<20 {
+		if pin.SizeMatches(path) {
 			continue
 		}
-		if err := run("downloading "+f, "curl", "-L", "--fail", "--progress-bar", "-o", path+".part", kokoroFiles+f); err != nil {
-			_ = os.Remove(path + ".part")
-			return err
-		}
-		if err := os.Rename(path+".part", path); err != nil {
+		_ = os.Remove(path) // another size: not the pinned file
+		fmt.Fprintf(w, "• downloading %s (%d MB, sha256 %s…)\n", f, pin.Size>>20, pin.SHA256[:12])
+		if err := pin.Download(w, path); err != nil {
 			return err
 		}
 	}

@@ -102,6 +102,13 @@ pair voice use kokoro am_michael
 pair voice use say         # back to the system voice
 ```
 
+Everything pair downloads is pinned: the whisper and Kokoro models come
+from fixed revisions and are kept only when their size and SHA-256 match
+the values in `internal/fetch/pins.go`, and the Python packages of Kokoro
+are installed from a lock file with the hashes of their wheels
+(`templates/kokoro-requirements.txt`). A model name pair has no pin for is
+not downloaded.
+
 A narration sentence takes about a second to synthesize on Apple Silicon,
 and that second overlaps with the attention sound, so speech starts about
 as fast as before. Sentences are played one by one: the first is heard

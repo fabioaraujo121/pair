@@ -34,3 +34,14 @@ var HammerspoonTemplate string
 //
 //go:embed templates/kokoro_worker.py
 var KokoroWorker string
+
+// KokoroRequirements pins the Python packages of the Kokoro engine, each
+// with the hashes of its wheels, so `pair voice setup kokoro` installs
+// exactly what was tested. Refresh it with:
+//
+//	uv pip compile --universal --generate-hashes --python-version 3.12 requirements.in -o templates/kokoro-requirements.txt
+//
+// from a requirements.in holding kokoro-onnx==<version> and soundfile==<version>.
+//
+//go:embed templates/kokoro-requirements.txt
+var KokoroRequirements string

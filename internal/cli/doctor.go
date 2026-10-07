@@ -15,6 +15,7 @@ import (
 
 	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
+	"github.com/fabioaraujo121/pair/internal/fetch"
 	"github.com/fabioaraujo121/pair/internal/nvim"
 	"github.com/fabioaraujo121/pair/internal/speech"
 )
@@ -144,31 +145,31 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 	return nil
 }
 
-// modelCheck reports the whisper model and downloads it with --fix.
+// modelCheck reports the whisper model and downloads it with --fix. Only
+// a pinned model is downloaded, and it is kept only when it is the file
+// the pin describes.
 func modelCheck(w io.Writer, cfg config.Config, opts DoctorOptions, hasWhisper bool) check {
+	name := filepath.Base(cfg.WhisperModel)
+	pin, pinErr := fetch.Find(fetch.Whisper, name)
 	if fi, err := os.Stat(cfg.WhisperModel); err == nil {
-		return check{"whisper model", true, true, fmt.Sprintf("%s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)}
+		detail := fmt.Sprintf("%s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)
+		if pinErr == nil && !pin.SizeMatches(cfg.WhisperModel) {
+			return check{"whisper model", hasWhisper, false, detail + fmt.Sprintf(": not the size of the pinned %s (%d bytes); remove it and run `pair doctor --fix`", name, pin.Size)}
+		}
+		return check{"whisper model", true, true, detail}
 	}
-	url := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" + filepath.Base(cfg.WhisperModel)
+	if pinErr != nil {
+		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 pair has no pinned download for %s: put the file there yourself, or use the default model", cfg.WhisperModel, name)}
+	}
 	if !opts.DownloadModel {
-		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 run `pair doctor --fix` to download it (about 1.6 GB) from %s", cfg.WhisperModel, url)}
+		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 run `pair doctor --fix` to download it (about 1.6 GB) from %s", cfg.WhisperModel, pin.URL)}
 	}
-	fmt.Fprintf(w, "downloading %s\n  to %s\n", url, cfg.WhisperModel)
-	if err := os.MkdirAll(filepath.Dir(cfg.WhisperModel), 0o755); err != nil {
-		return check{"whisper model", true, false, err.Error()}
-	}
-	tmp := cfg.WhisperModel + ".part"
-	cmd := exec.Command("curl", "-L", "--fail", "--progress-bar", "-o", tmp, url)
-	cmd.Stdout, cmd.Stderr = w, w
-	if err := cmd.Run(); err != nil {
-		_ = os.Remove(tmp)
+	fmt.Fprintf(w, "downloading %s\n  to %s\n  (sha256 %s…)\n", pin.URL, cfg.WhisperModel, pin.SHA256[:12])
+	if err := pin.Download(w, cfg.WhisperModel); err != nil {
 		return check{"whisper model", true, false, "download failed: " + err.Error()}
 	}
-	if err := os.Rename(tmp, cfg.WhisperModel); err != nil {
-		return check{"whisper model", true, false, err.Error()}
-	}
 	fi, _ := os.Stat(cfg.WhisperModel)
-	return check{"whisper model", true, true, fmt.Sprintf("downloaded %s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)}
+	return check{"whisper model", true, true, fmt.Sprintf("downloaded and verified %s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)}
 }
 
 // micCheck records one second through `rec` with a hard cap. The first

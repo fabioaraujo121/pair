@@ -128,12 +128,12 @@ Recommendation in bold. "Changes behaviour" marks what you would notice.
 
 ### Before publishing
 
-27. **Fix before the repository is public.** The whisper model, the Kokoro
-    model and the Python packages are downloaded without a pinned version
-    or a checksum.
-28. **Fix.** The release workflow publishes on a tag without running the
-    tests. `goreleaser check` never runs in CI. Actions are pinned by a
-    tag that can move, with a token that can write.
+27. **Done on 2026-10-07.** The whisper model, the Kokoro models and the
+    Python packages are pinned (fixed revisions, size and SHA-256, a lock
+    file with wheel hashes); see `internal/fetch`.
+28. **Done on 2026-10-07.** The release workflow runs vet and the tests
+    before goreleaser, the actions are pinned by commit, and the release
+    token can write to the two public repositories only.
 29. **Decide.** `pair init` writes the absolute path of the binary into
     `.claude/settings.json`, a file that is often committed.
 
