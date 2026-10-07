@@ -1,5 +1,7 @@
 # pair
 
+Website: https://fabioaraujo121.github.io/pair-releases/ (built from `site/`, see `site/BRIEF.md`).
+
 Voice-driven pairing with a coding agent in the terminal. Claude Code by
 default; Codex CLI with `pair init --agent codex`.
 
