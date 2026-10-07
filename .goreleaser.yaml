@@ -32,19 +32,25 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# The source stays private: the release and the cask go to two public
+# repositories, with a token that can write to those two only
+# (RELEASE_GITHUB_TOKEN). The commit log is not published with them.
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
+  disable: true
 
 release:
   github:
     owner: fabioaraujo121
-    name: pair
+    name: pair-releases
+    token: "{{ .Env.RELEASE_GITHUB_TOKEN }}"
   draft: false
   prerelease: auto
+  header: |
+    Voice-driven pairing with a coding agent (Claude Code, Codex) in the terminal.
+
+    ```sh
+    brew tap fabioaraujo121/tap && brew install --cask pair
+    ```
 
 # Homebrew: goreleaser's `brews` (formula) is deprecated since v2.10; casks
 # carry pre-built binaries and can depend on formulae.
@@ -52,7 +58,7 @@ homebrew_casks:
   - name: pair
     binaries:
       - pair
-    homepage: https://github.com/fabioaraujo121/pair
+    homepage: https://github.com/fabioaraujo121/pair-releases
     description: Voice-driven pairing with a coding agent (Claude Code, Codex) in the terminal
     license: MIT
     directory: Casks
@@ -61,7 +67,7 @@ homebrew_casks:
       owner: fabioaraujo121
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      token: "{{ .Env.RELEASE_GITHUB_TOKEN }}"
     dependencies:
       - formula: whisper.cpp
       - formula: sox

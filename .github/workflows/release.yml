@@ -4,25 +4,31 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   goreleaser:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+      # Nothing is published that the tests did not pass.
+      - name: Install Neovim for the integration tests
+        run: brew install neovim
+      - run: go vet ./...
+      - run: go test -race ./...
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           distribution: goreleaser
           version: "~> v2"
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A token with `repo` scope on fabioaraujo121/homebrew-tap, so the
-          # cask can be pushed there.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # A fine-grained token with "Contents: read and write" on
+          # fabioaraujo121/pair-releases and fabioaraujo121/homebrew-tap,
+          # and nothing on this repository: the release and the cask go
+          # there, the source stays here.
+          RELEASE_GITHUB_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}

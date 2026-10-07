@@ -65,10 +65,11 @@ Requirements: macOS 14+ (Apple Silicon recommended), [Claude
 Code](https://docs.anthropic.com/en/docs/claude-code), Neovim 0.10+, tmux,
 sox, whisper.cpp.
 
-With Homebrew, once the tap is published:
+With Homebrew:
 
 ```sh
-brew install fabioaraujo121/tap/pair      # pulls tmux, neovim, sox, whisper.cpp
+brew tap fabioaraujo121/tap
+brew install --cask pair                  # pulls tmux, neovim, sox, whisper.cpp
 ```
 
 With Go:
@@ -458,18 +459,29 @@ PAIR_REAL_AUDIO=1 go test ./internal/speech/
 
 ## Releasing
 
-Releases are built by goreleaser on a tag push (`.github/workflows/release.yml`):
-darwin arm64 and amd64 archives, a GitHub release, and a cask pushed to
-`fabioaraujo121/homebrew-tap`. One-time setup: create the `homebrew-tap`
-repository and add a `HOMEBREW_TAP_GITHUB_TOKEN` secret (a token with `repo`
-scope) to this repository. Then:
+The source is private; the releases are public. A tag push runs
+`.github/workflows/release.yml`: the tests, then goreleaser, which builds
+the darwin arm64 and amd64 archives, creates the release in
+[`fabioaraujo121/pair-releases`](https://github.com/fabioaraujo121/pair-releases)
+and pushes the cask to
+[`fabioaraujo121/homebrew-tap`](https://github.com/fabioaraujo121/homebrew-tap).
+Both are public; this repository is not, and its commit log is not
+published with the release.
+
+One-time setup: a fine-grained personal access token with "Contents: read
+and write" on those two repositories only, saved in this repository as the
+secret `RELEASE_GITHUB_TOKEN`. Then:
 
 ```sh
-git tag v0.1.0 && git push --tags
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
 The binary is not notarized; the cask strips the quarantine attribute after
-install.
+install. To rehearse a release without publishing anything:
+
+```sh
+RELEASE_GITHUB_TOKEN=x goreleaser release --snapshot --clean --skip=publish
+```
 
 ## License
 
