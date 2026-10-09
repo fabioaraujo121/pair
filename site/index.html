@@ -252,7 +252,7 @@ footer a { color: var(--ink-2); }
   <section class="stage" id="screen" aria-labelledby="screen-h">
     <div class="wrap">
       <h2 class="sr" id="screen-h">The session</h2>
-      <figure class="screen" aria-label="The pair session screen: a project tree and app/models/user.rb with Claude's edit drawn inside the file, a panel saying Claude is asking you, an activity column with what you said, what Claude did and the question it is waiting on, and a status bar with the talk, interrupt and claude buttons.">
+      <figure class="screen" aria-label="The pair session screen: a project tree and app/models/user.rb with Claude's edit drawn inside the file, a panel saying Claude is asking you, an activity column with what you said, what Claude did and the question it is waiting on, and a status bar with the talk, interrupt, claude and quit buttons.">
 <div class="term">
 <div class="win">
 <div class="files">
@@ -335,7 +335,7 @@ README.md</div>
         <div class="step">
           <span class="n">2</span>
           <h3><code>narrate</code>, <code>show</code>, then edit</h3>
-          <p>The agent says what it will change and why; Neovim jumps to the lines. After the edit, the change is drawn inside the file, added lines highlighted, removed lines in place.</p>
+          <p>The agent opens with one sentence on what it understood, then says what it will change and why; Neovim jumps to the lines. After the edit, the change is drawn inside the file, added lines highlighted, removed lines in place.</p>
         </div>
         <div class="step">
           <span class="n">3</span>
@@ -343,7 +343,7 @@ README.md</div>
           <p>When a decision is ambiguous, the agent asks aloud and waits. Press F5 and answer.</p>
         </div>
       </div>
-      <p class="note"><kbd class="key">F6</kbd> cuts the agent mid-sentence and opens the microphone for you. <kbd class="key">F7</kbd> shows the agent's own pane, otherwise hidden; it appears by itself when the agent waits for a permission or a trust dialog. Hand edits between turns are diffed and passed to the agent at its next prompt, so it never overwrites them unknowingly.</p>
+      <p class="note"><kbd class="key">F6</kbd> cuts the agent mid-sentence and opens the microphone for you. <kbd class="key">F7</kbd> shows the agent's own pane, otherwise hidden; it appears by itself when the agent waits for a permission or a trust dialog. <kbd class="key">F8</kbd>, pressed twice, ends the session. Hand edits between turns are diffed and passed to the agent at its next prompt, so it never overwrites them unknowingly.</p>
     </div>
   </section>
 
