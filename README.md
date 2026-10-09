@@ -155,8 +155,9 @@ start while they are there, since the hooks would run twice.
 In the session:
 
 1. Press `F5` (or click `🎙 talk` in the status bar) and say the task, or
-   press `F7` and type it in Claude's pane. A short "Let me look" in the
-   agent's voice says the words arrived while it starts. Claude writes the plan and open questions to
+   press `F7` and type it in Claude's pane. A short "Hm, let me see" in the
+   agent's voice says the words arrived; a few seconds later the agent's
+   own first sentence says what it understood and what it will do first. Claude writes the plan and open questions to
    `.pair/PAIRING.md` before touching code.
 2. Before each change Claude calls `narrate`. An attention sound plays
    first when it has been quiet for a while, then one or two sentences are
@@ -355,7 +356,7 @@ is read from the environment and from `~/.pair/config` only.
 | `PAIR_RATE` | `190` | speech rate in words per minute |
 | `PAIR_CUE` | `on` | attention sound before speech; `off` disables it |
 | `PAIR_CUE_IDLE` | `6` | seconds of quiet after which a narration is announced |
-| `PAIR_ACK` | `on` | a short spoken acknowledgement ("Let me look.", "Got it.") right after you talk, in the agent's voice; `off` disables it |
+| `PAIR_ACK` | `on` | a short spoken acknowledgement ("Hm, let me see.", "Okay.") right after you talk, in the agent's voice; `off` replaces it with a soft tick |
 | `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo.bin` | whisper.cpp model |
 | `PAIR_ASK_MIC` | `manual` | `manual`: you open the mic to answer a question; `auto`: it opens by itself after the question |
 | `PAIR_ASK_WAIT` | `180` | seconds a question waits for you to open the mic |

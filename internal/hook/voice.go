@@ -215,7 +215,13 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 // session. It is spoken after the transcript is on its way, so it delays
 // nothing, and it is tracked like any speech, so F5 or F6 cut it short.
 func acknowledge(cfg config.Config, kind speech.AckKind) {
-	if !cfg.Ack || cfg.Mute {
+	if cfg.Mute {
+		return
+	}
+	if !cfg.Ack {
+		if kind != speech.AckMissed {
+			chime("Pop") // the words went through, nothing more
+		}
 		return
 	}
 	speaker, err := speech.NewSpeaker(cfg)

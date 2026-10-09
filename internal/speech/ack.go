@@ -24,23 +24,24 @@ const (
 	AckMissed AckKind = "missed" // the microphone caught nothing usable
 )
 
-// acks are the phrases, by language and kind. One is picked at random,
+// acks are the phrases, by language and kind: what a person pairing says
+// while they turn to look, short and low-key. One is picked at random,
 // never the one just said. A language that has none falls back to English.
 var acks = map[string]map[AckKind][]string{
 	"en": {
-		AckPrompt: {"Let me look.", "On it.", "Got it, give me a moment.", "Okay, looking.", "Right, one moment."},
-		AckAnswer: {"Got it.", "Okay.", "Thanks, going on.", "Noted."},
-		AckMissed: {"Sorry, I didn't catch that."},
+		AckPrompt: {"Hm, let me see.", "Okay.", "Right.", "Let me look at that.", "One sec.", "Okay, let me see."},
+		AckAnswer: {"Okay.", "Right, thanks.", "Got it.", "Okay, good."},
+		AckMissed: {"Sorry, say that again?", "I didn't catch that."},
 	},
 	"pt": {
-		AckPrompt: {"Deixa eu ver.", "Já vou.", "Entendi, um momento.", "Certo, olhando.", "Beleza, um instante."},
-		AckAnswer: {"Entendi.", "Certo.", "Valeu, seguindo.", "Anotado."},
-		AckMissed: {"Desculpa, não entendi."},
+		AckPrompt: {"Hm, deixa eu ver.", "Tá.", "Certo.", "Deixa eu olhar isso.", "Um segundo.", "Tá, deixa eu ver."},
+		AckAnswer: {"Tá.", "Certo, valeu.", "Entendi.", "Tá, bom."},
+		AckMissed: {"Desculpa, pode repetir?", "Não entendi."},
 	},
 	"es": {
-		AckPrompt: {"Déjame ver.", "Voy.", "Entendido, un momento.", "Vale, mirando."},
-		AckAnswer: {"Entendido.", "Vale.", "Gracias, sigo.", "Anotado."},
-		AckMissed: {"Perdón, no entendí."},
+		AckPrompt: {"A ver.", "Vale.", "Bien.", "Déjame mirar eso.", "Un segundo."},
+		AckAnswer: {"Vale.", "Bien, gracias.", "Entendido."},
+		AckMissed: {"Perdón, ¿puedes repetir?", "No te entendí."},
 	},
 }
 
@@ -90,5 +91,15 @@ func Acknowledge(ctx context.Context, speaker Speaker, dir, lang string, kind Ac
 		_ = os.MkdirAll(dir, 0o700)
 		_ = os.WriteFile(lastFile, []byte(phrase+"\n"), 0o600)
 	}
+	// A person takes a moment before they react; an answer on the instant
+	// sounds like a machine.
+	select {
+	case <-time.After(ackPause):
+	case <-ctx.Done():
+		return nil
+	}
 	return speaker.Speak(ctx, phrase)
 }
+
+// ackPause is the beat before the phrase.
+var ackPause = 400 * time.Millisecond

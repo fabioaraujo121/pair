@@ -25,8 +25,8 @@ func TestAcknowledgementsVaryAndFallBack(t *testing.T) {
 	if p := AckPhrase("pt-BR", AckAnswer, ""); p == "" || p == AckPhrase("en", AckAnswer, "") && false {
 		t.Fatalf("Portuguese: %q", p)
 	}
-	if AckPhrase("pt", AckMissed, "") != "Desculpa, não entendi." {
-		t.Fatal("Portuguese miss")
+	if p := AckPhrase("pt", AckMissed, ""); p != "Desculpa, pode repetir?" && p != "Não entendi." {
+		t.Fatalf("Portuguese miss: %q", p)
 	}
 	if p := AckPhrase("ja", AckPrompt, ""); p == "" {
 		t.Fatal("a language without phrases falls back to English")
@@ -37,6 +37,8 @@ func TestAcknowledgementsVaryAndFallBack(t *testing.T) {
 }
 
 func TestAcknowledgeSpeaksOnceAndRemembers(t *testing.T) {
+	ackPause = 0
+	defer func() { ackPause = 400 * time.Millisecond }()
 	dir := t.TempDir()
 	rec := &recordingSpeaker{}
 	for i := 0; i < 3; i++ {
@@ -64,6 +66,8 @@ func TestAcknowledgeSpeaksOnceAndRemembers(t *testing.T) {
 // While the agent holds the floor, an acknowledgement waits a little and
 // then gives up rather than talk over it.
 func TestAcknowledgementNeverTalksOverTheAgent(t *testing.T) {
+	ackPause = 0
+	defer func() { ackPause = 400 * time.Millisecond }()
 	dir := t.TempDir()
 	floor, err := AcquireFloor(context.Background(), dir, false)
 	if err != nil {
