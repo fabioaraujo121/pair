@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
@@ -398,5 +399,24 @@ func TestTheSessionHookCarriesTheInstructions(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
 			t.Fatalf("%s was written", name)
 		}
+	}
+}
+
+// Quit ends the session on the second press within a few seconds, so a
+// stray key or click cannot end it.
+func TestQuitTakesTwoPresses(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 10, 9, 10, 0, 0, 0, time.UTC)
+	if quitWantsStop(dir, now) {
+		t.Fatal("the first press only asks")
+	}
+	if quitWantsStop(dir, now.Add(10*time.Second)) {
+		t.Fatal("a press long after the first is a first press again")
+	}
+	if !quitWantsStop(dir, now.Add(12*time.Second)) {
+		t.Fatal("the second press within the window ends the session")
+	}
+	if quitWantsStop(dir, now.Add(13*time.Second)) {
+		t.Fatal("after ending, the count starts over")
 	}
 }

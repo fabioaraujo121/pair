@@ -323,6 +323,7 @@ func sessionChrome(exe, who string) [][]string {
 	listen := in + " hook listen >/dev/null 2>&1"
 	interrupt := in + " hook interrupt >/dev/null 2>&1"
 	toggle := in + " agent >/dev/null 2>&1"
+	quit := in + " hook click quit >/dev/null 2>&1"
 	return [][]string{
 		{"set-option", "-g", "mouse", "on"},
 		// Full colour for Neovim's syntax highlighting.
@@ -339,7 +340,8 @@ func sessionChrome(exe, who string) [][]string {
 		// Buttons: clicking one runs `pair hook click <name>`.
 		{"set-option", "-g", "status-right", "#[range=user|talk]#{?#{==:#{@pair_mic},on},#[fg=white#,bg=red#,bold] ■ stop F5 ,#[fg=black#,bg=white] 🎙 talk F5 }#[default]#[norange] " +
 			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
-			"#[range=user|agent]#[fg=black,bg=white] ⌨ " + strings.ToLower(who) + " F7 #[default]#[norange] "},
+			"#[range=user|agent]#[fg=black,bg=white] ⌨ " + strings.ToLower(who) + " F7 #[default]#[norange] " +
+			"#[range=user|quit]#[fg=black,bg=white] ⏻ quit F8 #[default]#[norange] "},
 		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", in + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
@@ -351,6 +353,10 @@ func sessionChrome(exe, who string) [][]string {
 		// F7 shows the agent's pane under the editor and hides it again.
 		{"bind-key", "-n", "F7", "run-shell", "-b", toggle},
 		{"bind-key", "c", "run-shell", "-b", toggle},
+		// F8 ends the session: the agent, the panes, the voice. Pressed
+		// twice, so a stray key does not end it.
+		{"bind-key", "-n", "F8", "run-shell", "-b", quit},
+		{"bind-key", "q", "run-shell", "-b", quit},
 	}
 }
 

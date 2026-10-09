@@ -26,7 +26,7 @@ the agent.
 │                │                             │   in the model, because …   │
 │                │                             │   ✎ app/models/user.rb +3 −1│
 └────────────────┴─────────────────────────────┴─────────────────────────────┘
- pair ● Claude is working: editing user.rb   🎙 talk F5  ✋ interrupt F6  ⌨ claude F7
+ pair ● Claude is working: editing user.rb   🎙 talk F5  ✋ interrupt F6  ⌨ claude F7  ⏻ quit F8
 ```
 
 The screen answers three questions: is Claude running, which files is it
@@ -238,6 +238,7 @@ inside a pair session, and that conversation writes nothing to it.
 | While the mic is open | `F5` again, or click `■ stop` | end the recording now and send what you said |
 | Anywhere in the session | `F6`, `C-b i`, or click `✋ interrupt` | interrupt Claude, then open the mic |
 | Anywhere in the session | `F7`, `C-b c`, or click `⌨ claude` | show Claude Code's pane under the editor, or hide it |
+| Anywhere in the session | `F8`, `C-b q`, or click `⏻ quit`, twice | end the session, the agent included: what `pair stop` does |
 | Anywhere in the session | mouse click, `C-b` + arrows | switch pane |
 | Neovim | `<leader>pt` / `<leader>pi` | same as `F5` / `F6` |
 | Neovim (visual) | `<leader>pp` | point Claude at the selected lines, with an optional note |

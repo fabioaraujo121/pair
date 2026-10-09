@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -53,8 +54,58 @@ func Click(args []string, out io.Writer) error {
 		return Interrupt(args[1:], out)
 	case "agent", "claude": // "claude" was the button's name when Claude Code was the only agent
 		return ToggleAgent(args[1:], out)
+	case "quit":
+		return Quit(args[1:], out)
 	}
 	return nil // a click anywhere else on the status bar
+}
+
+// Quit ends the session, the agent included, the way `pair stop` does. It
+// takes two presses within a few seconds: one key or click must not end
+// a session by accident.
+func Quit(args []string, out io.Writer) error {
+	cfg := voiceConfig(args)
+	if !quitWantsStop(cfg.RunDir, time.Now()) {
+		if tmux.HasSession(cfg.Session) {
+			tmux.Message(cfg.Session, "⏻ press quit again within 4 seconds to end the session")
+		}
+		fmt.Fprintln(out, "press quit again to end the session")
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	// `pair stop` from the repository, told which session this is. The
+	// hook runs from the tmux server, not from inside the session, so it
+	// survives the session it ends.
+	stop := exec.Command(exe, "stop")
+	stop.Dir = cfg.Root
+	stop.Env = append(os.Environ(), "PAIR_SESSION="+cfg.Session, "PAIR_TMUX_SOCKET="+tmux.Socket)
+	result, err := stop.CombinedOutput()
+	fmt.Fprint(out, string(result))
+	return err
+}
+
+// quitMarker records a press of quit; a second one within quitWindow ends
+// the session.
+const (
+	quitMarker = "quit.press"
+	quitWindow = 4 * time.Second
+)
+
+// quitWantsStop records a press and reports whether it is the second
+// within the window.
+func quitWantsStop(dir string, now time.Time) bool {
+	marker := filepath.Join(dir, quitMarker)
+	if fi, err := os.Stat(marker); err == nil && now.Sub(fi.ModTime()) < quitWindow && now.After(fi.ModTime()) {
+		_ = os.Remove(marker)
+		return true
+	}
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(marker, nil, 0o600)
+	_ = os.Chtimes(marker, now, now)
+	return false
 }
 
 // ToggleAgent shows the agent's pane under the editor, or hides it again.
