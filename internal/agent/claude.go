@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,8 +30,29 @@ func (Claude) SubmitDelay() time.Duration { return 0 }                  // Claud
 // call to a background task after two minutes.
 func (Claude) Env() []string { return []string{"CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0"} }
 
-func (Claude) Launch(o Launch) []string {
-	var args []string
+// Launch writes the session's settings (hooks and pre-approved tools) and
+// the MCP server definition under o.RunDir and names them on the command
+// line. Claude Code reads them for this process only.
+func (c Claude) Launch(o Launch) ([]string, error) {
+	settings := filepath.Join(o.RunDir, "claude-settings.json")
+	servers := filepath.Join(o.RunDir, "claude-mcp.json")
+	if err := os.MkdirAll(o.RunDir, 0o700); err != nil {
+		return nil, err
+	}
+	doc, err := ClaudeSettings(o.Exe)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(settings, doc, 0o600); err != nil {
+		return nil, err
+	}
+	mcp, _ := json.MarshalIndent(map[string]any{"mcpServers": map[string]any{"pair": map[string]any{
+		"type": "stdio", "command": o.Exe, "args": []string{"mcp", "--root", o.Root},
+	}}}, "", "  ")
+	if err := os.WriteFile(servers, append(mcp, '\n'), 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"--settings", settings, "--mcp-config", servers}
 	switch {
 	case o.Resume != "":
 		args = append(args, "--resume", o.Resume)
@@ -40,7 +62,26 @@ func (Claude) Launch(o Launch) []string {
 	if o.Name != "" {
 		args = append(args, "--name="+o.Name) // one word with "=", so a name that starts with a dash is a name
 	}
-	return args
+	return args, nil
+}
+
+// ClaudeSettings is the settings document of a session: pair's hooks and
+// the pre-approval of its three tools, nothing else.
+func ClaudeSettings(exe string) ([]byte, error) {
+	merged, err := MergeHooks(nil, exe, "claude", nil)
+	if err != nil {
+		return nil, err
+	}
+	doc := map[string]any{}
+	if err := json.Unmarshal(merged, &doc); err != nil {
+		return nil, err
+	}
+	allow := make([]any, 0, len(claudeTools))
+	for _, t := range claudeTools {
+		allow = append(allow, t)
+	}
+	doc["permissions"] = map[string]any{"allow": allow}
+	return marshal(doc)
 }
 
 // claudeConversation is the shape of a Claude Code conversation id.
@@ -57,112 +98,120 @@ func (Claude) WaitingOnDialog(screen string) bool {
 }
 
 func (Claude) ContextOutput(hook, text string) []byte {
-	return contextOutput("UserPromptSubmit", text)
+	return contextOutput(hookEvent(hook), text)
 }
 
 // claudeTools are pre-approved so narrate, ask and show never prompt.
 var claudeTools = []string{"mcp__pair__narrate", "mcp__pair__ask", "mcp__pair__show"}
 
-// Install writes the hooks and permissions into .claude/settings.json, the
-// pairing block into CLAUDE.md, and registers the MCP server in Claude
-// Code's local scope for the project.
-func (c Claude) Install(in Install, report io.Writer) error {
-	settingsPath := filepath.Join(in.Root, ".claude", "settings.json")
-	existing, _ := os.ReadFile(settingsPath)
-	merged, err := MergeClaudeSettings(existing, in.Exe)
-	if err != nil {
-		return err
+// Leftovers names what the first versions wrote into the repository.
+func (Claude) Leftovers(root string) []string {
+	var found []string
+	if hooksInstalled(filepath.Join(root, ".claude", "settings.json")) {
+		found = append(found, ".claude/settings.json (pair hooks)")
 	}
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
-		return err
+	if hasBlock(filepath.Join(root, "CLAUDE.md")) {
+		found = append(found, "CLAUDE.md (pairing block)")
 	}
-	if err := os.WriteFile(settingsPath, merged, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintln(report, "✓ .claude/settings.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop, Notification) and MCP permissions")
-
-	changed, err := writeBlock(filepath.Join(in.Root, c.InstructionsFile()), in.Lang)
-	if err != nil {
-		return err
-	}
-	if changed {
-		fmt.Fprintf(report, "✓ CLAUDE.md: pairing-mode block (%s) between %s markers\n", in.Lang, blockStart)
-	} else {
-		fmt.Fprintln(report, "• CLAUDE.md: pairing-mode block already up to date")
-	}
-
-	if err := registerClaudeMCP(in.Exe, in.Root); err != nil {
-		fmt.Fprintf(report, "! MCP server not registered: %v\n  register by hand: claude mcp add pair -- %s mcp --root %s\n", err, in.Exe, in.Root)
-	} else {
-		fmt.Fprintln(report, "✓ MCP server \"pair\" registered for this project (claude mcp add, local scope)")
-	}
-	return nil
+	return found
 }
 
-// MergeClaudeSettings returns settings.json with pair's hooks and
-// permissions merged in.
-func MergeClaudeSettings(existing []byte, exe string) ([]byte, error) {
-	merged, err := MergeHooks(existing, exe, "claude", nil)
-	if err != nil {
-		return nil, err
-	}
-	doc := map[string]any{}
-	if err := json.Unmarshal(merged, &doc); err != nil {
-		return nil, err
-	}
-	perms, _ := doc["permissions"].(map[string]any)
-	if perms == nil {
-		perms = map[string]any{}
-	}
-	allow, _ := perms["allow"].([]any)
-	for _, tool := range claudeTools {
-		if !containsString(allow, tool) {
-			allow = append(allow, tool)
+// Uninstall takes pair's hooks and permissions out of .claude/settings.json,
+// the pairing block out of CLAUDE.md, and the MCP server out of Claude
+// Code's local registration for the project.
+func (Claude) Uninstall(root string, report io.Writer) error {
+	settingsPath := filepath.Join(root, ".claude", "settings.json")
+	if existing, err := os.ReadFile(settingsPath); err == nil {
+		cleaned, changed, err := withoutClaudeSettings(existing)
+		if err != nil {
+			return err
+		}
+		switch {
+		case changed && cleaned == nil:
+			_ = os.Remove(settingsPath)
+			_ = os.Remove(filepath.Dir(settingsPath)) // only when empty
+			fmt.Fprintln(report, "✓ .claude/settings.json held nothing but pair's hooks: removed")
+		case changed:
+			if err := os.WriteFile(settingsPath, cleaned, 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintln(report, "✓ .claude/settings.json: pair's hooks and permissions removed, the rest kept")
 		}
 	}
-	perms["allow"] = allow
-	doc["permissions"] = perms
-	return marshal(doc)
-}
-
-// Installed looks for pair's hooks in .claude/settings.json.
-func (Claude) Installed(root string) (bool, string) {
-	if hooksInstalled(filepath.Join(root, ".claude", "settings.json")) {
-		return true, ""
-	}
-	return false, "no pair hooks in .claude/settings.json"
-}
-
-// Registered asks Claude Code whether the server is known for the project.
-func (Claude) Registered(root string) (bool, string) {
-	claude, err := exec.LookPath("claude")
-	if err != nil {
-		return false, "claude is not on PATH"
-	}
-	get := claudeCmd(claude, "mcp", "get", "pair")
-	get.Dir = root
-	if err := get.Run(); err != nil {
-		return false, "run `pair init` to register it"
-	}
-	return true, ""
-}
-
-// registerClaudeMCP records the server in Claude Code's local scope for
-// this project with the absolute binary path, replacing any earlier entry.
-func registerClaudeMCP(exe, root string) error {
-	claude, err := exec.LookPath("claude")
-	if err != nil {
+	if changed, err := removeBlockFile(filepath.Join(root, "CLAUDE.md")); err != nil {
 		return err
+	} else if changed {
+		fmt.Fprintln(report, "✓ CLAUDE.md: pairing block removed")
 	}
-	remove := claudeCmd(claude, "mcp", "remove", "--scope", "local", "pair")
-	remove.Dir = root
-	_ = remove.Run() // absent is fine
-	add := claudeCmd(claude, "mcp", "add", "--scope", "local", "--transport", "stdio", "pair", "--", exe, "mcp", "--root", root)
-	add.Dir = root
-	if out, err := add.CombinedOutput(); err != nil {
-		return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	if claude, err := exec.LookPath("claude"); err == nil {
+		get := claudeCmd(claude, "mcp", "get", "pair")
+		get.Dir = root
+		if get.Run() == nil {
+			remove := claudeCmd(claude, "mcp", "remove", "--scope", "local", "pair")
+			remove.Dir = root
+			if out, err := remove.CombinedOutput(); err != nil {
+				fmt.Fprintf(report, "! MCP server still registered: %v: %s\n  remove by hand: claude mcp remove --scope local pair\n", err, strings.TrimSpace(string(out)))
+			} else {
+				fmt.Fprintln(report, "✓ MCP server \"pair\" removed from Claude Code's registration for this project")
+			}
+		}
 	}
 	return nil
+}
+
+// withoutClaudeSettings returns settings.json without pair's hooks and
+// permissions: nil when nothing else was in it, the same bytes when
+// nothing of pair's was.
+func withoutClaudeSettings(existing []byte) (cleaned []byte, changed bool, err error) {
+	doc := map[string]any{}
+	if err := json.Unmarshal(existing, &doc); err != nil {
+		return nil, false, fmt.Errorf(".claude/settings.json is not valid JSON, not touching it: %w", err)
+	}
+	if hooks, _ := doc["hooks"].(map[string]any); hooks != nil {
+		for event, groups := range hooks {
+			list, _ := groups.([]any)
+			kept := withoutOurs(list)
+			if len(kept) != len(list) {
+				changed = true
+			}
+			if len(kept) == 0 {
+				delete(hooks, event)
+			} else {
+				hooks[event] = kept
+			}
+		}
+		if len(hooks) == 0 {
+			delete(doc, "hooks")
+		}
+	}
+	if perms, _ := doc["permissions"].(map[string]any); perms != nil {
+		if allow, _ := perms["allow"].([]any); allow != nil {
+			kept := make([]any, 0, len(allow))
+			for _, v := range allow {
+				if str, ok := v.(string); ok && strings.HasPrefix(str, "mcp__pair__") {
+					changed = true
+					continue
+				}
+				kept = append(kept, v)
+			}
+			if len(kept) == 0 {
+				delete(perms, "allow")
+			} else {
+				perms["allow"] = kept
+			}
+		}
+		if len(perms) == 0 {
+			delete(doc, "permissions")
+		}
+	}
+	if !changed {
+		return existing, false, nil
+	}
+	if len(doc) == 0 {
+		return nil, true, nil
+	}
+	out, err := marshal(doc)
+	return out, true, err
 }
 
 // claudeCmd builds a `claude` subcommand. It goes through the user's
@@ -170,14 +219,20 @@ func registerClaudeMCP(exe, root string) error {
 // example one that selects a per-folder account) applies, exactly as if
 // the user had typed the command. It also works when pair itself runs
 // inside a Claude Code session.
+//
+// The command gets half a minute: a `claude` that is not logged in, or
+// that asks something on its first run, must not hold pair for ever.
 func claudeCmd(claude string, args ...string) *exec.Cmd {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_ = cancel // the process ends with the context or with Wait
 	var cmd *exec.Cmd
 	sh := os.Getenv("SHELL")
 	if base := filepath.Base(sh); base == "zsh" || base == "bash" {
-		cmd = exec.Command(sh, "-ic", "claude "+shell.Join(args))
+		cmd = exec.CommandContext(ctx, sh, "-ic", "claude "+shell.Join(args))
 	} else {
-		cmd = exec.Command(claude, args...)
+		cmd = exec.CommandContext(ctx, claude, args...)
 	}
+	cmd.WaitDelay = time.Second
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "CLAUDECODE=") {
 			cmd.Env = append(cmd.Env, kv)

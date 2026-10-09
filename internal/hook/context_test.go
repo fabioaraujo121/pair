@@ -34,8 +34,9 @@ func newRepo(t *testing.T) (*Handler, string) {
 	run("config", "user.name", "t")
 	_ = os.WriteFile(filepath.Join(root, "app.rb"), []byte("class App\n  def run\n    1\n  end\nend\n"), 0o644)
 	_ = os.WriteFile(filepath.Join(root, "lib.rb"), []byte("module Lib\nend\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".pair/\nPAIRING.md\n"), 0o644)
-	_ = os.WriteFile(filepath.Join(root, "PAIRING.md"), []byte("# PAIRING\n\n## Decisions\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".pair/\n"), 0o644)
+	_ = os.MkdirAll(filepath.Join(root, ".pair"), 0o700)
+	_ = os.WriteFile(filepath.Join(root, ".pair", "PAIRING.md"), []byte("# PAIRING\n\n## Decisions\n"), 0o644)
 	run("add", ".")
 	run("commit", "-q", "-m", "init")
 	h := &Handler{
@@ -129,13 +130,13 @@ func TestPromptReportsNewIgnoredAndDeletedFiles(t *testing.T) {
 	// New untracked file.
 	write(t, filepath.Join(root, "notes.rb"), "# todo\n")
 	// Scratchpad (gitignored) edited by the engineer.
-	write(t, filepath.Join(root, "PAIRING.md"), "# PAIRING\n\n## Decisions\n- use Solid Queue\n")
+	write(t, filepath.Join(root, ".pair", "PAIRING.md"), "# PAIRING\n\n## Decisions\n- use Solid Queue\n")
 	ctx := prompt(t, h)
 	if !strings.Contains(ctx, "### notes.rb") || !strings.Contains(ctx, "+# todo") {
 		t.Fatalf("untracked file not reported:\n%s", ctx)
 	}
-	if !strings.Contains(ctx, "### PAIRING.md") || !strings.Contains(ctx, "+- use Solid Queue") {
-		t.Fatalf("PAIRING.md edit not reported:\n%s", ctx)
+	if !strings.Contains(ctx, "### .pair/PAIRING.md") || !strings.Contains(ctx, "+- use Solid Queue") {
+		t.Fatalf("scratchpad edit not reported:\n%s", ctx)
 	}
 
 	// Deleting a known file is reported as deleted.
@@ -294,7 +295,7 @@ func TestSecretsAreReportedByNameOnly(t *testing.T) {
 
 func TestFilesTheRepositoryIgnoresAreWithheld(t *testing.T) {
 	h, root := newRepo(t)
-	write(t, filepath.Join(root, ".gitignore"), ".pair/\nPAIRING.md\nlocal.yml\n")
+	write(t, filepath.Join(root, ".gitignore"), ".pair/\nlocal.yml\n")
 	local := filepath.Join(root, "local.yml")
 	write(t, local, "token: before\n")
 	prompt(t, h)
@@ -312,7 +313,7 @@ func TestFilesTheRepositoryIgnoresAreWithheld(t *testing.T) {
 	}
 
 	// The scratchpad is ignored by choice, and is the exception.
-	write(t, filepath.Join(root, "PAIRING.md"), "# PAIRING\n\n## Decisions\n- use Sidekiq\n")
+	write(t, filepath.Join(root, ".pair", "PAIRING.md"), "# PAIRING\n\n## Decisions\n- use Sidekiq\n")
 	if ctx = prompt(t, h); !strings.Contains(ctx, "+- use Sidekiq") {
 		t.Fatalf("the scratchpad must be shown in full:\n%s", ctx)
 	}

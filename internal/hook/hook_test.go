@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -377,4 +378,25 @@ func parseAs(t *testing.T, a agent.Agent, hook, js string) *agent.Event {
 func jsonString(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	return `"` + r.Replace(s) + `"`
+}
+
+// The pairing instructions reach the agent through its session hook, as
+// context, and only inside a pair session: nothing is written into the
+// repository for them.
+func TestTheSessionHookCarriesTheInstructions(t *testing.T) {
+	root := t.TempDir()
+	var out bytes.Buffer
+	h := &Handler{Cfg: config.Config{Root: root, StateDir: filepath.Join(root, ".pair"), Lang: "pt"}, Log: events.Open(filepath.Join(root, ".pair")), Nvim: &fakeNvim{}, Agent: agent.Codex{}, Stdout: &out}
+	if err := h.Session(&agent.Event{Hook: "session", Conversation: "s1"}); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	if !strings.Contains(text, `"hookEventName":"SessionStart"`) || !strings.Contains(text, "Speak Portuguese") || !strings.Contains(text, ".pair/PAIRING.md") {
+		t.Fatalf("session output:\n%s", text)
+	}
+	for _, name := range []string{"CLAUDE.md", "AGENTS.md", ".claude", ".codex"} {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			t.Fatalf("%s was written", name)
+		}
+	}
 }

@@ -18,12 +18,11 @@ import (
 // apply_patch, whose argument is a patch in Codex's own grammar.
 type Codex struct{}
 
-func (Codex) Name() string             { return "codex" }
-func (Codex) Title() string            { return "Codex" }
-func (Codex) Short() string            { return "Codex" }
-func (Codex) Binary() string           { return "codex" }
-func (Codex) InstructionsFile() string { return "AGENTS.md" }
-func (Codex) Env() []string            { return nil }
+func (Codex) Name() string   { return "codex" }
+func (Codex) Title() string  { return "Codex" }
+func (Codex) Short() string  { return "Codex" }
+func (Codex) Binary() string { return "codex" }
+func (Codex) Env() []string  { return nil }
 
 // InterruptKeys: a single Escape interrupts the running turn. Never C-c:
 // one press ends the session.
@@ -35,84 +34,31 @@ func (Codex) InterruptKeys() []string { return []string{"Escape"} }
 // break instead of sending the prompt.
 func (Codex) SubmitDelay() time.Duration { return 400 * time.Millisecond }
 
-func (Codex) Launch(o Launch) []string {
+// Launch writes pair's profile for Codex, a config layer that holds the
+// hooks and the MCP server and applies only when Codex is started with
+// `-p pair`, then names the repository through a command-line override.
+// The profile is the same file on every start, at a path Codex keeps the
+// hook trust for, so the hooks are reviewed once per machine.
+func (c Codex) Launch(o Launch) ([]string, error) {
+	path, err := c.profilePath()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(path, []byte(CodexProfile(o.Exe, o.AskTimeout)), 0o600); err != nil {
+		return nil, err
+	}
+	args := []string{"-p", codexProfile, "-c", "mcp_servers.pair.args=[\"mcp\", \"--root\", " + tomlString(o.Root) + "]"}
 	switch {
 	case o.Resume != "":
-		return []string{"resume", o.Resume}
+		args = append(args, "resume", o.Resume)
 	case o.Continue:
-		return []string{"resume", "--last"}
+		args = append(args, "resume", "--last")
 	}
-	return nil // Codex takes no name at start; the session is named on pair's side
+	return args, nil // Codex takes no name at start; the session is named on pair's side
 }
-
-// ConversationID: Codex thread ids are UUIDs.
-func (Codex) ConversationID(s string) bool { return claudeConversation.MatchString(s) }
-
-// WaitingOnDialog recognises the folder trust question of a repository
-// opened for the first time, in its current and its earlier wording.
-func (Codex) WaitingOnDialog(screen string) bool {
-	s := strings.ToLower(screen)
-	return strings.Contains(s, "trust this folder") || strings.Contains(s, "do you trust") ||
-		strings.Contains(s, "trust and continue")
-}
-
-func (Codex) ContextOutput(hook, text string) []byte {
-	return contextOutput("UserPromptSubmit", text)
-}
-
-// codexEvents maps pair's events to Codex's. Codex asks for a permission
-// through PermissionRequest and has no idle notification.
-var codexEvents = map[string]string{"Notification": "PermissionRequest"}
-
-// Install writes the hooks into .codex/hooks.json, the MCP server into
-// .codex/config.toml, and the pairing block into AGENTS.md. Codex runs a
-// repository's hooks only after they were reviewed once in its /hooks
-// screen; Install says so.
-func (c Codex) Install(in Install, report io.Writer) error {
-	dir := filepath.Join(in.Root, ".codex")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	hooksPath := filepath.Join(dir, "hooks.json")
-	existing, _ := os.ReadFile(hooksPath)
-	merged, err := MergeHooks(existing, in.Exe, "codex", codexEvents)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(hooksPath, merged, 0o644); err != nil {
-		return err
-	}
-	fmt.Fprintln(report, "✓ .codex/hooks.json: hooks (PreToolUse, PostToolUse, UserPromptSubmit, Stop, PermissionRequest)")
-
-	configPath := filepath.Join(dir, "config.toml")
-	current, _ := os.ReadFile(configPath)
-	updated := UpsertCodexMCP(string(current), in.Exe, in.Root, in.AskTimeout)
-	if updated != string(current) {
-		if err := os.WriteFile(configPath, []byte(updated), 0o644); err != nil {
-			return err
-		}
-		fmt.Fprintln(report, "✓ .codex/config.toml: MCP server \"pair\" for this project, its tools pre-approved")
-	} else {
-		fmt.Fprintln(report, "• .codex/config.toml: MCP server \"pair\" already registered")
-	}
-
-	changed, err := writeBlock(filepath.Join(in.Root, c.InstructionsFile()), in.Lang)
-	if err != nil {
-		return err
-	}
-	if changed {
-		fmt.Fprintf(report, "✓ AGENTS.md: pairing-mode block (%s) between %s markers\n", in.Lang, blockStart)
-	} else {
-		fmt.Fprintln(report, "• AGENTS.md: pairing-mode block already up to date")
-	}
-	fmt.Fprintln(report, "! Codex runs a repository's hooks only once you have reviewed them: open Codex here, run /hooks, and trust them")
-	return nil
-}
-
-const (
-	codexSectionStart = "# pair:start"
-	codexSectionEnd   = "# pair:end"
-)
 
 // codexForwardedEnv are the variables Codex hands to pair's MCP server.
 // Codex starts an MCP server with a minimal environment (HOME, PATH, SHELL,
@@ -128,37 +74,172 @@ var codexForwardedEnv = []string{
 	"PAIR_SILENCE_SECS", "PAIR_SILENCE_LEVEL", "PAIR_HIGHLIGHT_TTL", "PAIR_DIFF_LIMIT", "PAIR_DEBUG",
 }
 
-// UpsertCodexMCP returns config.toml with pair's MCP server section put in
-// place of an earlier one, or appended. The section is marked, so the rest
-// of the file stays the engineer's, and no TOML is parsed.
-func UpsertCodexMCP(content, exe, root string, askTimeout int) string {
+// codexProfile is the name of pair's config layer: $CODEX_HOME/pair.config.toml.
+const codexProfile = "pair"
+
+func (Codex) profilePath() (string, error) {
+	home := os.Getenv("CODEX_HOME")
+	if home == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		home = filepath.Join(h, ".codex")
+	}
+	return filepath.Join(home, codexProfile+".config.toml"), nil
+}
+
+// CodexProfile renders the config layer: the hooks, and the MCP server
+// with its tools pre-approved, the session's variables forwarded, and a
+// tool timeout long enough for ask. The repository is not in it: it comes
+// on the command line, so one profile serves every repository.
+func CodexProfile(exe string, askTimeout int) string {
 	if askTimeout < 600 {
 		askTimeout = 600
 	}
-	section := codexSectionStart + " (written by `pair init`; edited by hand, it is rewritten at the next run)\n" +
-		"[mcp_servers.pair]\n" +
-		"command = " + tomlString(exe) + "\n" +
-		"args = [\"mcp\", \"--root\", " + tomlString(root) + "]\n" +
-		"env_vars = [" + tomlList(codexForwardedEnv) + "] # the session's variables, which Codex does not pass on by itself\n" +
-		fmt.Sprintf("tool_timeout_sec = %d # ask waits for the engineer's push-to-talk\n", askTimeout) +
-		"default_tools_approval_mode = \"approve\" # narrate, show and ask never prompt\n" +
-		codexSectionEnd + "\n"
+	var b strings.Builder
+	b.WriteString("# Written by pair at every `pair start`; Codex loads it with `-p pair`.\n")
+	b.WriteString("# Not read by a Codex started without pair.\n\n")
+	b.WriteString("[mcp_servers.pair]\n")
+	b.WriteString("command = " + tomlString(exe) + "\n")
+	b.WriteString("args = [\"mcp\"] # the repository is added on the command line\n")
+	b.WriteString("env_vars = [" + tomlList(codexForwardedEnv) + "]\n")
+	fmt.Fprintf(&b, "tool_timeout_sec = %d\n", askTimeout)
+	b.WriteString("default_tools_approval_mode = \"approve\"\n")
+	for _, spec := range Hooks {
+		event, mapped := codexEvents[spec.Event]
+		if mapped && event == "" {
+			continue
+		}
+		if !mapped {
+			event = spec.Event
+		}
+		b.WriteString("\n[[hooks." + event + "]]\n")
+		if spec.Matcher != "" {
+			b.WriteString("matcher = " + tomlString(spec.Matcher) + "\n")
+		}
+		b.WriteString("[[hooks." + event + ".hooks]]\n")
+		b.WriteString("type = \"command\"\n")
+		b.WriteString("command = " + tomlString(hookCommand(exe, spec.Name, "codex")) + "\n")
+		fmt.Fprintf(&b, "timeout = %d\n", spec.Timeout)
+	}
+	return b.String()
+}
+
+// ConversationID: Codex thread ids are UUIDs.
+func (Codex) ConversationID(s string) bool { return claudeConversation.MatchString(s) }
+
+// WaitingOnDialog recognises the folder trust question of a repository
+// opened for the first time, in its current and its earlier wording.
+func (Codex) WaitingOnDialog(screen string) bool {
+	s := strings.ToLower(screen)
+	return strings.Contains(s, "trust this folder") || strings.Contains(s, "do you trust") ||
+		strings.Contains(s, "trust and continue")
+}
+
+func (Codex) ContextOutput(hook, text string) []byte {
+	return contextOutput(hookEvent(hook), text)
+}
+
+// codexEvents maps pair's events to Codex's. Codex asks for a permission
+// through PermissionRequest and has no idle notification.
+var codexEvents = map[string]string{"Notification": "PermissionRequest"}
+
+// Leftovers names what the first versions wrote into the repository.
+func (Codex) Leftovers(root string) []string {
+	var found []string
+	if hooksInstalled(filepath.Join(root, ".codex", "hooks.json")) {
+		found = append(found, ".codex/hooks.json (pair hooks)")
+	}
+	if data, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml")); err == nil && strings.Contains(string(data), codexSectionStart) {
+		found = append(found, ".codex/config.toml (pair's MCP server)")
+	}
+	if hasBlock(filepath.Join(root, "AGENTS.md")) {
+		found = append(found, "AGENTS.md (pairing block)")
+	}
+	return found
+}
+
+// Uninstall removes what the first versions wrote: pair's hooks from
+// .codex/hooks.json, its section from .codex/config.toml, the pairing
+// block from AGENTS.md. Files left empty go, and so does an emptied .codex.
+func (Codex) Uninstall(root string, report io.Writer) error {
+	dir := filepath.Join(root, ".codex")
+	hooksPath := filepath.Join(dir, "hooks.json")
+	if existing, err := os.ReadFile(hooksPath); err == nil {
+		doc := map[string]any{}
+		if err := json.Unmarshal(existing, &doc); err == nil {
+			changed := false
+			if hooks, _ := doc["hooks"].(map[string]any); hooks != nil {
+				for event, groups := range hooks {
+					list, _ := groups.([]any)
+					kept := withoutOurs(list)
+					if len(kept) != len(list) {
+						changed = true
+					}
+					if len(kept) == 0 {
+						delete(hooks, event)
+					} else {
+						hooks[event] = kept
+					}
+				}
+				if len(hooks) == 0 {
+					delete(doc, "hooks")
+				}
+			}
+			switch {
+			case changed && len(doc) == 0:
+				_ = os.Remove(hooksPath)
+				fmt.Fprintln(report, "✓ .codex/hooks.json held nothing but pair's hooks: removed")
+			case changed:
+				out, _ := marshal(doc)
+				if err := os.WriteFile(hooksPath, out, 0o644); err != nil {
+					return err
+				}
+				fmt.Fprintln(report, "✓ .codex/hooks.json: pair's hooks removed, the rest kept")
+			}
+		}
+	}
+	configPath := filepath.Join(dir, "config.toml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		if out, had := removeCodexSection(string(data)); had {
+			if strings.TrimSpace(out) == "" {
+				_ = os.Remove(configPath)
+				fmt.Fprintln(report, "✓ .codex/config.toml held nothing but pair's MCP server: removed")
+			} else if err := os.WriteFile(configPath, []byte(out), 0o644); err != nil {
+				return err
+			} else {
+				fmt.Fprintln(report, "✓ .codex/config.toml: pair's MCP server removed, the rest kept")
+			}
+		}
+	}
+	_ = os.Remove(dir) // only when empty
+	if changed, err := removeBlockFile(filepath.Join(root, "AGENTS.md")); err != nil {
+		return err
+	} else if changed {
+		fmt.Fprintln(report, "✓ AGENTS.md: pairing block removed")
+	}
+	return nil
+}
+
+const (
+	codexSectionStart = "# pair:start"
+	codexSectionEnd   = "# pair:end"
+)
+
+// removeCodexSection returns config.toml without the section the first
+// versions wrote, and whether there was one.
+func removeCodexSection(content string) (string, bool) {
 	start := strings.Index(content, codexSectionStart)
 	end := strings.Index(content, codexSectionEnd)
-	if start >= 0 && end > start {
-		end += len(codexSectionEnd)
-		if end < len(content) && content[end] == '\n' {
-			end++
-		}
-		return content[:start] + section + content[end:]
+	if start < 0 || end < start {
+		return content, false
 	}
-	if strings.TrimSpace(content) == "" {
-		return section
+	end += len(codexSectionEnd)
+	if end < len(content) && content[end] == '\n' {
+		end++
 	}
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
-	}
-	return content + "\n" + section
+	return strings.TrimRight(content[:start]+content[end:], "\n") + "\n", true
 }
 
 // tomlList renders strings as the inside of a TOML array.
@@ -174,23 +255,6 @@ func tomlList(items []string) string {
 func tomlString(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	return `"` + r.Replace(s) + `"`
-}
-
-// Installed looks for pair's hooks in .codex/hooks.json.
-func (Codex) Installed(root string) (bool, string) {
-	if hooksInstalled(filepath.Join(root, ".codex", "hooks.json")) {
-		return true, ""
-	}
-	return false, "no pair hooks in .codex/hooks.json"
-}
-
-// Registered looks for the section Install writes.
-func (Codex) Registered(root string) (bool, string) {
-	data, err := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
-	if err != nil || !strings.Contains(string(data), "[mcp_servers.pair]") {
-		return false, "run `pair init --agent codex` to register it"
-	}
-	return true, ""
 }
 
 // codexInput is the JSON Codex writes to a hook's stdin: the same names

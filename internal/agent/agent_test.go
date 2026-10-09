@@ -25,7 +25,7 @@ func TestEveryAgentIsComplete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if a.Name() != name || a.Title() == "" || a.Short() == "" || a.Binary() == "" || a.InstructionsFile() == "" || len(a.InterruptKeys()) == 0 {
+		if a.Name() != name || a.Title() == "" || a.Short() == "" || a.Binary() == "" || len(a.InterruptKeys()) == 0 {
 			t.Errorf("%s: incomplete adapter", name)
 		}
 		if a.WaitingOnDialog("") || a.WaitingOnDialog("❯ Add email validation\n✻ Thinking… (12s)\n") {
@@ -45,8 +45,11 @@ func TestEveryAgentIsComplete(t *testing.T) {
 			t.Errorf("%s: invalid JSON must error", name)
 		}
 		out := string(a.ContextOutput("prompt", "engineer changed <a> & b"))
-		if !strings.Contains(out, `"additionalContext":"engineer changed <a> & b"`) || !strings.HasSuffix(out, "\n") {
+		if !strings.Contains(out, `"additionalContext":"engineer changed <a> & b"`) || !strings.Contains(out, `"hookEventName":"UserPromptSubmit"`) || !strings.HasSuffix(out, "\n") {
 			t.Errorf("%s: context output %q", name, out)
+		}
+		if out := string(a.ContextOutput("session", "rules")); !strings.Contains(out, `"hookEventName":"SessionStart"`) {
+			t.Errorf("%s: session context output %q", name, out)
 		}
 	}
 	if got := PeekCWD([]byte(`{"session_id":"x","cwd":"/tmp/proj"}`)); got != "/tmp/proj" {
@@ -59,22 +62,33 @@ func TestEveryAgentIsComplete(t *testing.T) {
 
 func TestLaunchArguments(t *testing.T) {
 	id := "0b6f4c1e-8a0d-4e55-9c1f-3a2b1c0d9e8f"
+	run := t.TempDir()
+	base := Launch{Exe: "/opt/pair", Root: "/repo/app", RunDir: run, AskTimeout: 360}
+	with := func(l Launch, resume string, cont bool, name string) Launch {
+		l.Resume, l.Continue, l.Name = resume, cont, name
+		return l
+	}
+	settings, servers := filepath.Join(run, "claude-settings.json"), filepath.Join(run, "claude-mcp.json")
 	cases := []struct {
 		agent Agent
 		in    Launch
 		want  string
 	}{
-		{Claude{}, Launch{}, ""},
-		{Claude{}, Launch{Resume: id}, "--resume " + id},
-		{Claude{}, Launch{Continue: true}, "--continue"},
-		{Claude{}, Launch{Continue: true, Name: "fix login"}, "--continue --name=fix login"},
-		{Codex{}, Launch{}, ""},
-		{Codex{}, Launch{Resume: id}, "resume " + id},
-		{Codex{}, Launch{Continue: true, Name: "fix login"}, "resume --last"},
+		{Claude{}, base, "--settings " + settings + " --mcp-config " + servers},
+		{Claude{}, with(base, id, false, ""), "--settings " + settings + " --mcp-config " + servers + " --resume " + id},
+		{Claude{}, with(base, "", true, "fix login"), "--settings " + settings + " --mcp-config " + servers + " --continue --name=fix login"},
+		{Codex{}, base, `-p pair -c mcp_servers.pair.args=["mcp", "--root", "/repo/app"]`},
+		{Codex{}, with(base, id, false, ""), `-p pair -c mcp_servers.pair.args=["mcp", "--root", "/repo/app"] resume ` + id},
+		{Codex{}, with(base, "", true, "fix login"), `-p pair -c mcp_servers.pair.args=["mcp", "--root", "/repo/app"] resume --last`},
 	}
+	t.Setenv("CODEX_HOME", filepath.Join(t.TempDir(), "codex"))
 	for _, c := range cases {
-		if got := strings.Join(c.agent.Launch(c.in), " "); got != c.want {
-			t.Errorf("%s %+v: got %q, want %q", c.agent.Name(), c.in, got, c.want)
+		args, err := c.agent.Launch(c.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(args, " "); got != c.want {
+			t.Errorf("%s %+v:\n got %q\nwant %q", c.agent.Name(), c.in, got, c.want)
 		}
 	}
 	if env := (Claude{}).Env(); len(env) != 1 || env[0] != "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0" {
@@ -90,71 +104,169 @@ func TestLaunchArguments(t *testing.T) {
 	}
 }
 
-func TestCodexInstallWritesHooksMCPAndInstructions(t *testing.T) {
+// What Claude Code gets for a session lives under the run directory: its
+// hooks and pre-approvals in one settings file, pair's MCP server in
+// another. Nothing of it is in the repository.
+func TestClaudeSessionFiles(t *testing.T) {
+	run := filepath.Join(t.TempDir(), "run", "pair-x")
+	if _, err := (Claude{}).Launch(Launch{Exe: "/opt/pair", Root: "/repo/app", RunDir: run}); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := os.ReadFile(filepath.Join(run, "claude-settings.json"))
+	doc := decode(t, settings)
+	hooks := doc["hooks"].(map[string]any)
+	for _, ev := range []string{"SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "Notification"} {
+		if _, ok := hooks[ev]; !ok {
+			t.Errorf("settings lack the %s hook:\n%s", ev, settings)
+		}
+	}
+	if !strings.Contains(string(settings), `/opt/pair hook session --agent claude`) {
+		t.Errorf("the session hook carries the instructions:\n%s", settings)
+	}
+	allow := doc["permissions"].(map[string]any)["allow"].([]any)
+	if len(allow) != 3 || allow[0] != "mcp__pair__narrate" {
+		t.Errorf("pre-approved tools: %v", allow)
+	}
+	servers, _ := os.ReadFile(filepath.Join(run, "claude-mcp.json"))
+	if !strings.Contains(string(servers), `"command": "/opt/pair"`) || !strings.Contains(string(servers), `"--root",`) || !strings.Contains(string(servers), `"/repo/app"`) {
+		t.Errorf("mcp file:\n%s", servers)
+	}
+	for _, f := range []string{"claude-settings.json", "claude-mcp.json"} {
+		if fi, _ := os.Stat(filepath.Join(run, f)); fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s is readable by others: %v", f, fi.Mode().Perm())
+		}
+	}
+}
+
+// Codex gets one profile under its home, the same on every start so the
+// hooks stay trusted, with the repository given on the command line.
+func TestCodexProfile(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "codex")
+	t.Setenv("CODEX_HOME", home)
+	if _, err := (Codex{}).Launch(Launch{Exe: "/opt/pair", Root: "/repo/app", RunDir: t.TempDir(), AskTimeout: 900}); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := os.ReadFile(filepath.Join(home, "pair.config.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(profile)
+	for _, want := range []string{"[mcp_servers.pair]", `command = "/opt/pair"`, `args = ["mcp"]`, "tool_timeout_sec = 900", `default_tools_approval_mode = "approve"`,
+		`env_vars = ["PAIR_ACTIVE", "PAIR_SESSION"`, "[[hooks.SessionStart]]", "[[hooks.PreToolUse]]", `matcher = "Edit|Write"`, "[[hooks.PermissionRequest]]", "[[hooks.Stop]]", "[[hooks.UserPromptSubmit]]",
+		`command = "/opt/pair hook session --agent codex"`, `command = "/opt/pair hook notify --agent codex"`} {
+		if !strings.Contains(text, want) {
+			t.Errorf("profile lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "/repo/app") || strings.Contains(text, "[[hooks.Notification]]") {
+		t.Errorf("the profile is for every repository and uses Codex's own events:\n%s", text)
+	}
+	// Written again for another repository, it is byte for byte the same:
+	// Codex keeps the trust of hooks by file path and content.
+	if _, err := (Codex{}).Launch(Launch{Exe: "/opt/pair", Root: "/other/repo", RunDir: t.TempDir(), AskTimeout: 900}); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := os.ReadFile(filepath.Join(home, "pair.config.toml"))
+	if string(again) != text {
+		t.Error("the profile changed with the repository")
+	}
+}
+
+// Earlier versions wrote hooks, blocks and registrations into the
+// repository. Uninstall takes exactly those out and keeps everything else.
+func TestUninstallRemovesWhatEarlierVersionsWrote(t *testing.T) {
 	root := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		_ = os.MkdirAll(filepath.Dir(path), 0o755)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(".claude/settings.json", `{"model":"opus","permissions":{"allow":["Bash(npm test)","mcp__pair__narrate","mcp__pair__ask","mcp__pair__show"],"deny":["Bash(rm -rf:*)"]},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"echo audit"}]},{"matcher":"Edit|Write","hooks":[{"type":"command","command":"/old/pair hook pre_edit"}]}],"Stop":[{"hooks":[{"type":"command","command":"/old/pair hook stop"}]}]}}`)
+	write("CLAUDE.md", "# My project\n\nRules of the house.\n\n<!-- pair:start -->\n## Pairing mode\nrules\n<!-- pair:end -->\n")
+	write(".codex/hooks.json", `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/old/pair hook stop --agent codex"}]}]}}`)
+	write(".codex/config.toml", "model = \"gpt-5\"\n\n# pair:start (written by `pair init`)\n[mcp_servers.pair]\ncommand = \"/old/pair\"\n# pair:end\n")
+	write("AGENTS.md", "<!-- pair:start -->\n## Pairing mode\nrules\n<!-- pair:end -->\n")
+
+	if left := (Claude{}).Leftovers(root); len(left) != 2 {
+		t.Fatalf("claude leftovers: %v", left)
+	}
+	if left := (Codex{}).Leftovers(root); len(left) != 3 {
+		t.Fatalf("codex leftovers: %v", left)
+	}
+	t.Setenv("PATH", "/usr/bin:/bin") // no claude on PATH: the registration step is skipped
 	var report bytes.Buffer
-	in := Install{Root: root, Exe: "/opt/homebrew/bin/pair", Lang: "pt", AskTimeout: 360}
-	if err := (Codex{}).Install(in, &report); err != nil {
-		t.Fatal(err)
-	}
-	hooks, _ := os.ReadFile(filepath.Join(root, ".codex", "hooks.json"))
-	doc := decode(t, hooks)
-	events := doc["hooks"].(map[string]any)
-	for _, ev := range []string{"PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "PermissionRequest"} {
-		if _, ok := events[ev]; !ok {
-			t.Errorf("hooks.json lacks %s:\n%s", ev, hooks)
+	for _, a := range []Agent{Claude{}, Codex{}} {
+		if err := a.Uninstall(root, &report); err != nil {
+			t.Fatal(err)
+		}
+		if left := a.Leftovers(root); len(left) != 0 {
+			t.Errorf("%s: still there after uninstall: %v", a.Name(), left)
 		}
 	}
-	if _, ok := events["Notification"]; ok {
-		t.Errorf("Codex has no Notification event:\n%s", hooks)
+	settings, _ := os.ReadFile(filepath.Join(root, ".claude", "settings.json"))
+	doc := decode(t, settings)
+	if doc["model"] != "opus" {
+		t.Error("the engineer's settings must survive")
 	}
-	if !strings.Contains(string(hooks), `/opt/homebrew/bin/pair hook notify --agent codex`) || !strings.Contains(string(hooks), `"matcher": "Edit|Write"`) {
-		t.Errorf("hooks.json:\n%s", hooks)
+	hooks := doc["hooks"].(map[string]any)
+	if _, ok := hooks["Stop"]; ok {
+		t.Error("a group that held only pair's hook must go")
 	}
-
+	if pre := hooks["PreToolUse"].([]any); len(pre) != 1 || pre[0].(map[string]any)["matcher"] != "Bash" {
+		t.Errorf("the audit hook must survive alone: %v", pre)
+	}
+	perms := doc["permissions"].(map[string]any)
+	if allow := perms["allow"].([]any); len(allow) != 1 || allow[0] != "Bash(npm test)" {
+		t.Errorf("allow: %v", allow)
+	}
+	if deny := perms["deny"].([]any); len(deny) != 1 {
+		t.Errorf("deny: %v", deny)
+	}
+	claudeMD, _ := os.ReadFile(filepath.Join(root, "CLAUDE.md"))
+	if string(claudeMD) != "# My project\n\nRules of the house.\n" {
+		t.Errorf("CLAUDE.md:\n%q", claudeMD)
+	}
+	if _, err := os.Stat(filepath.Join(root, "AGENTS.md")); err == nil {
+		t.Error("an AGENTS.md that held only the block must go")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".codex", "hooks.json")); err == nil {
+		t.Error("a hooks.json that held only pair's hooks must go")
+	}
 	toml, _ := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
-	for _, want := range []string{"[mcp_servers.pair]", `command = "/opt/homebrew/bin/pair"`, `args = ["mcp", "--root", "` + root + `"]`, "tool_timeout_sec = 600", `default_tools_approval_mode = "approve"`,
-		`env_vars = ["PAIR_ACTIVE", "PAIR_SESSION", "PAIR_SOCK", "PAIR_ROOT", "PAIR_TMUX_SOCKET", "PAIR_AGENT",`} {
-		if !strings.Contains(string(toml), want) {
-			t.Errorf("config.toml lacks %q:\n%s", want, toml)
+	if string(toml) != "model = \"gpt-5\"\n" {
+		t.Errorf("config.toml:\n%q", toml)
+	}
+	if !strings.Contains(report.String(), "CLAUDE.md: pairing block removed") || !strings.Contains(report.String(), ".codex/hooks.json held nothing") {
+		t.Errorf("report:\n%s", report.String())
+	}
+	// A repository that never saw pair: nothing to do, nothing created.
+	clean := t.TempDir()
+	report.Reset()
+	for _, a := range []Agent{Claude{}, Codex{}} {
+		if err := a.Uninstall(clean, &report); err != nil {
+			t.Fatal(err)
 		}
 	}
-	agents, _ := os.ReadFile(filepath.Join(root, "AGENTS.md"))
-	if !strings.Contains(string(agents), "Speak Portuguese") || !strings.Contains(string(agents), blockStart) {
-		t.Errorf("AGENTS.md:\n%s", agents)
+	if entries, _ := os.ReadDir(clean); len(entries) != 0 || report.Len() != 0 {
+		t.Errorf("a clean repository was touched: %v %q", entries, report.String())
 	}
-	if _, err := os.Stat(filepath.Join(root, "CLAUDE.md")); err == nil {
-		t.Error("Codex must not write CLAUDE.md")
-	}
-	if !strings.Contains(report.String(), "/hooks") {
-		t.Errorf("the report must say hooks need a review:\n%s", report.String())
-	}
-	if ok, _ := (Codex{}).Registered(root); !ok {
-		t.Error("the server must count as registered")
-	}
+}
 
-	// A second run changes nothing; the engineer's own config is kept.
-	_ = os.WriteFile(filepath.Join(root, ".codex", "config.toml"), []byte("model = \"gpt-5\"\n\n"+string(toml)), 0o644)
-	report.Reset()
-	if err := (Codex{}).Install(in, &report); err != nil {
-		t.Fatal(err)
+func TestInstructions(t *testing.T) {
+	text := Instructions("pt")
+	for _, want := range []string{"Speak Portuguese", ".pair/PAIRING.md", "`narrate`", "`ask`", "`show`"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("instructions lack %q:\n%s", want, text)
+		}
 	}
-	again, _ := os.ReadFile(filepath.Join(root, ".codex", "config.toml"))
-	if !strings.HasPrefix(string(again), "model = \"gpt-5\"\n") || strings.Count(string(again), "[mcp_servers.pair]") != 1 {
-		t.Errorf("second run:\n%s", again)
+	if strings.Contains(text, "<!--") || !strings.HasSuffix(text, "\n") {
+		t.Errorf("no markers, one trailing newline:\n%q", text)
 	}
-	hooks2, _ := os.ReadFile(filepath.Join(root, ".codex", "hooks.json"))
-	if string(hooks2) != string(hooks) {
-		t.Errorf("hooks.json changed on the second run:\n%s", hooks2)
-	}
-
-	// A longer wait for the engineer raises the tool timeout.
-	longer := UpsertCodexMCP(string(again), in.Exe, root, 1500)
-	if !strings.Contains(longer, "tool_timeout_sec = 1500") || strings.Contains(longer, "tool_timeout_sec = 600") {
-		t.Errorf("timeout not updated:\n%s", longer)
-	}
-	if got := tomlString(`C:\x "q"`); got != `"C:\\x \"q\""` {
-		t.Errorf("tomlString: %s", got)
+	if got := Instructions("xx"); !strings.Contains(got, "Speak xx.") {
+		t.Errorf("unknown language code is used as is: %s", got)
 	}
 }
 
@@ -294,35 +406,4 @@ func TestClaudeHookInput(t *testing.T) {
 func jsonString(s string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\t", `\t`)
 	return `"` + r.Replace(s) + `"`
-}
-
-func TestInstalledMeansTheHooksAreThere(t *testing.T) {
-	for _, a := range []Agent{Claude{}, Codex{}} {
-		root := t.TempDir()
-		if ok, why := a.Installed(root); ok || why == "" {
-			t.Errorf("%s: an empty repository is not set up", a.Name())
-		}
-		if a.Name() == "claude" {
-			// Claude Code's install registers the MCP server through the
-			// claude command: only its hooks file is written here.
-			merged, err := MergeClaudeSettings(nil, "/opt/pair")
-			if err != nil {
-				t.Fatal(err)
-			}
-			_ = os.MkdirAll(filepath.Join(root, ".claude"), 0o755)
-			_ = os.WriteFile(filepath.Join(root, ".claude", "settings.json"), merged, 0o644)
-		} else if err := a.Install(Install{Root: root, Exe: "/opt/pair", Lang: "en"}, &bytes.Buffer{}); err != nil {
-			t.Fatal(err)
-		}
-		if ok, why := a.Installed(root); !ok {
-			t.Errorf("%s: set up, yet %s", a.Name(), why)
-		}
-	}
-	// A hooks file of someone else's does not count.
-	root := t.TempDir()
-	_ = os.MkdirAll(filepath.Join(root, ".codex"), 0o755)
-	_ = os.WriteFile(filepath.Join(root, ".codex", "hooks.json"), []byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"notify-send done"}]}]}}`), 0o644)
-	if ok, _ := (Codex{}).Installed(root); ok {
-		t.Error("another tool's hooks are not pair's")
-	}
 }

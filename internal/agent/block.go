@@ -7,9 +7,11 @@ import (
 	pair "github.com/fabioaraujo121/pair"
 )
 
-// The pairing-mode instructions go into the file the agent reads at the
-// start of every conversation (CLAUDE.md, AGENTS.md), between markers, so
-// the rest of the file stays the engineer's.
+// The pairing instructions reach the agent at the start of every session,
+// through its SessionStart hook, and only while a pair session runs. The
+// first versions wrote them into CLAUDE.md or AGENTS.md between markers,
+// where every session in the repository read them; Uninstall takes those
+// blocks out.
 
 const (
 	blockStart = "<!-- pair:start -->"
@@ -21,44 +23,53 @@ var languageNames = map[string]string{
 	"de": "German", "it": "Italian", "ja": "Japanese", "nl": "Dutch",
 }
 
-// PairingBlock renders the pairing-mode block for a language code.
-func PairingBlock(lang string) string {
+// Instructions renders the pairing instructions for a language code.
+func Instructions(lang string) string {
 	name := languageNames[strings.ToLower(lang)]
 	if name == "" {
 		name = lang
 	}
-	body := strings.TrimSpace(strings.ReplaceAll(pair.InstructionsTemplate, "{{LANGUAGE}}", name))
-	return blockStart + "\n" + body + "\n" + blockEnd + "\n"
+	return strings.TrimSpace(strings.ReplaceAll(pair.InstructionsTemplate, "{{LANGUAGE}}", name)) + "\n"
 }
 
-// UpsertBlock returns content with the marked block replaced, or appended
-// after a blank line when there is none. Calling it twice yields the same
-// result.
-func UpsertBlock(content, block string) string {
+// RemoveBlock returns content without the marked block, and whether there
+// was one.
+func RemoveBlock(content string) (string, bool) {
 	start := strings.Index(content, blockStart)
 	end := strings.Index(content, blockEnd)
-	if start >= 0 && end > start {
-		end += len(blockEnd)
-		if end < len(content) && content[end] == '\n' {
-			end++
-		}
-		return content[:start] + block + content[end:]
+	if start < 0 || end < start {
+		return content, false
 	}
-	if content == "" {
-		return block
+	end += len(blockEnd)
+	if end < len(content) && content[end] == '\n' {
+		end++
 	}
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
+	out := content[:start] + content[end:]
+	if strings.TrimSpace(out) == "" {
+		return "", true
 	}
-	return content + "\n" + block
+	return strings.TrimRight(out, "\n") + "\n", true
 }
 
-// writeBlock puts the block into path. It reports whether the file changed.
-func writeBlock(path, lang string) (bool, error) {
-	current, _ := os.ReadFile(path)
-	updated := UpsertBlock(string(current), PairingBlock(lang))
-	if updated == string(current) {
+// hasBlock reports whether the file holds the marked block.
+func hasBlock(path string) bool {
+	data, err := os.ReadFile(path)
+	return err == nil && strings.Contains(string(data), blockStart)
+}
+
+// removeBlockFile takes the block out of the file; an emptied file is
+// removed. It reports whether anything changed.
+func removeBlockFile(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return false, nil
 	}
-	return true, os.WriteFile(path, []byte(updated), 0o644)
+	out, had := RemoveBlock(string(data))
+	if !had {
+		return false, nil
+	}
+	if out == "" {
+		return true, os.Remove(path)
+	}
+	return true, os.WriteFile(path, []byte(out), 0o644)
 }

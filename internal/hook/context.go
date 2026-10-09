@@ -150,7 +150,7 @@ func secretName(file string) bool {
 // repository ignores. The scratchpad is ignored by choice and is the
 // exception.
 func (h *Handler) withheld(ctx context.Context, file string) bool {
-	if filepath.Clean(file) == filepath.Join(h.Cfg.Root, "PAIRING.md") {
+	if filepath.Clean(file) == h.scratchpad() {
 		return false
 	}
 	if secretName(file) {
@@ -177,8 +177,14 @@ func (h *Handler) inside(path string) bool {
 	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
+	if rel == filepath.Join(".pair", "PAIRING.md") {
+		return true // the scratchpad: the one file of .pair the engineer and the agent both write
+	}
 	return rel != ".pair" && !strings.HasPrefix(rel, ".pair"+string(filepath.Separator))
 }
+
+// scratchpad is the shared PAIRING.md of the session, in .pair.
+func (h *Handler) scratchpad() string { return filepath.Join(h.Cfg.StateDir, "PAIRING.md") }
 
 // Change is one file that differs from what Claude last saw.
 type Change struct {
@@ -243,7 +249,7 @@ func (h *Handler) Prompt(ev *agent.Event) error {
 }
 
 // candidates lists files worth checking: everything git reports as
-// modified or untracked, every file Claude touched, and PAIRING.md.
+// modified or untracked, every file Claude touched, and the scratchpad.
 func (h *Handler) candidates(ctx context.Context, st State) []string {
 	seen := map[string]bool{}
 	var files []string
@@ -268,7 +274,7 @@ func (h *Handler) candidates(ctx context.Context, st State) []string {
 	for f := range st.Files {
 		add(f)
 	}
-	add(filepath.Join(h.Cfg.Root, "PAIRING.md"))
+	add(h.scratchpad())
 	sort.Strings(files)
 	return files
 }

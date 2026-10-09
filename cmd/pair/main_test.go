@@ -58,7 +58,7 @@ func TestHooksAlwaysExitZero(t *testing.T) {
 		"no such cwd":    `{"cwd": "/no/such/directory", "prompt": "hello"}`,
 		"negative lines": `{"cwd": "` + repo + `", "tool_name": "Edit", "tool_input": {"file_path": "` + repo + `/a.rb"}, "tool_response": {"structuredPatch": [{"oldStart": -5, "oldLines": -1, "newStart": -5, "newLines": 99999999, "lines": ["+x"]}]}}`,
 	}
-	for _, hook := range []string{"pre_edit", "post_edit", "prompt", "stop", "notify", "activity", "no_such_hook"} {
+	for _, hook := range []string{"session", "pre_edit", "post_edit", "prompt", "stop", "notify", "activity", "no_such_hook"} {
 		for what, input := range inputs {
 			for _, active := range []string{"PAIR_ACTIVE=1", "PAIR_ACTIVE="} {
 				cmd := exec.Command(bin, "hook", hook)

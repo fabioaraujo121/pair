@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	pair "github.com/fabioaraujo121/pair"
 	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/events"
@@ -29,7 +31,7 @@ import (
 //
 //	┌──────────────────────────────┬──────────────────┐
 //	│ neovim: tree | editor        │ presence         │
-//	│              | PAIRING.md    ├──────────────────┤
+//	│              | .pair/PAIRING ├──────────────────┤
 //	│                              │ activity         │
 //	│ (the agent, when shown)      │                  │
 //	└──────────────────────────────┴──────────────────┘
@@ -51,10 +53,11 @@ func Start(args []string) error {
 			return fmt.Errorf("%s is not on PATH; run `pair doctor`", bin)
 		}
 	}
-	// Without its hooks the agent works unseen: the status bar never
-	// moves and nothing is drawn. Better to say so than to start.
-	if ok, why := ag.Installed(cfg.Root); !ok {
-		return fmt.Errorf("%s is not set up for pairing in %s (%s): run `pair init --agent %s` first", ag.Title(), tildePath(cfg.Root), why, ag.Name())
+	// The first versions wrote hooks and instructions into the repository.
+	// Left there, the hooks would run twice and the instructions would
+	// reach every session, with or without pair.
+	if left := ag.Leftovers(cfg.Root); len(left) > 0 {
+		return fmt.Errorf("an earlier version of pair wrote into %s: %s. Run `pair uninstall` once, then `pair`", tildePath(cfg.Root), strings.Join(left, ", "))
 	}
 	if config.SockTooLong(cfg.Sock) {
 		return fmt.Errorf("PAIR_SOCK is %d bytes; macOS allows %d. Use a shorter path or 127.0.0.1:<port>", len(cfg.Sock), config.MaxSockPath)
@@ -93,7 +96,7 @@ func Start(args []string) error {
 	if !continued {
 		hook.ResetState(cfg.StateDir) // fresh baseline for hand-edit detection
 	}
-	if err := createSession(cfg, ag, pluginDir, log, agentArgs(cfg, ag, meta, continued)); err != nil {
+	if err := createSession(cfg, ag, pluginDir, log, meta, continued); err != nil {
 		return err
 	}
 	kind, word := "session_start", "started"
@@ -171,11 +174,12 @@ func openSession(cfg config.Config, o startOptions) (session.Meta, bool, error) 
 	return m, true, nil
 }
 
-// agentArgs builds the arguments of the agent's command: the conversation
-// to resume when the session is continued, the session's name, and what
-// the engineer configured.
-func agentArgs(cfg config.Config, ag agent.Agent, m session.Meta, continued bool) string {
-	o := agent.Launch{Name: m.Name}
+// agentArgs builds the arguments of the agent's command: the session's
+// hooks and MCP server, handed to this process only; the conversation to
+// resume when the session is continued; the session's name; and what the
+// engineer configured.
+func agentArgs(cfg config.Config, ag agent.Agent, exe string, m session.Meta, continued bool) (string, error) {
+	o := agent.Launch{Name: m.Name, Exe: exe, Root: cfg.Root, RunDir: cfg.RunDir, AskTimeout: cfg.AskWait + cfg.AskMax + 120}
 	if continued {
 		// The id comes from a file in the repository: it is used only
 		// when it has the shape of one.
@@ -185,24 +189,46 @@ func agentArgs(cfg config.Config, ag agent.Agent, m session.Meta, continued bool
 			o.Continue = true
 		}
 	}
-	parts := make([]string, 0, 4)
-	for _, a := range ag.Launch(o) {
+	args, err := ag.Launch(o)
+	if err != nil {
+		return "", err
+	}
+	parts := make([]string, 0, len(args)+1)
+	for _, a := range args {
 		parts = append(parts, shellQuote(a))
 	}
 	if cfg.ClaudeArgs != "" {
 		parts = append(parts, cfg.ClaudeArgs) // the engineer's own, from the environment or ~/.pair/config
 	}
 	if len(parts) == 0 {
-		return ""
+		return "", nil
 	}
-	return " " + strings.Join(parts, " ")
+	return " " + strings.Join(parts, " "), nil
 }
 
-func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *events.Log, agentArguments string) error {
+// scratchpad makes sure the shared scratchpad exists for the session. It
+// lives in .pair, which is private to the session and ignored by git.
+func scratchpad(cfg config.Config) {
+	path := filepath.Join(cfg.StateDir, "PAIRING.md")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		_ = os.WriteFile(path, []byte(pair.PairingTemplate), 0o600)
+	}
+}
+
+func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *events.Log, meta session.Meta, continued bool) error {
 	removeSocket(cfg.Sock) // stale, from a previous session
 	_ = os.RemoveAll(cfg.RunDir)
 	s := cfg.Session
 	exe, _ := os.Executable()
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	events.Private(cfg.StateDir)
+	scratchpad(cfg)
+	agentArguments, err := agentArgs(cfg, ag, exe, meta, continued)
+	if err != nil {
+		return err
+	}
 	cols, lines := terminalSize()
 	fail := func(err error) error {
 		_, _ = tmuxRun("kill-session", "-t", "="+s)

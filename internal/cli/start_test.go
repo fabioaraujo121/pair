@@ -45,38 +45,55 @@ func TestShellQuoteSurvivesAShell(t *testing.T) {
 }
 
 func TestClaudeArgumentsComeFromFilesAndAreNotTrusted(t *testing.T) {
-	cfg := config.Config{}
+	cfg := config.Config{Root: t.TempDir(), RunDir: filepath.Join(t.TempDir(), "run"), AskWait: 180, AskMax: 60}
 	ag := agent.Claude{}
 	id := "0b6f4c1e-8a0d-4e55-9c1f-3a2b1c0d9e8f"
+	args := func(m session.Meta, continued bool) string {
+		t.Helper()
+		got, err := agentArgs(cfg, ag, "/opt/pair", m, continued)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	session_ := " --settings " + filepath.Join(cfg.RunDir, "claude-settings.json") + " --mcp-config " + filepath.Join(cfg.RunDir, "claude-mcp.json")
 
-	if got := agentArgs(cfg, ag, session.Meta{Conversation: id}, true); got != " --resume "+id {
+	if got := args(session.Meta{Conversation: id}, true); got != session_+" --resume "+id {
 		t.Fatalf("a conversation id must be resumed: %q", got)
 	}
 	// session.json is a file in the repository: anything can be in it.
 	for _, forged := range []string{"x; touch /tmp/owned", "--dangerously-skip-permissions", "$(id)", id + " --extra", ""} {
-		got := agentArgs(cfg, ag, session.Meta{Conversation: forged}, true)
-		if got != " --continue" {
+		got := args(session.Meta{Conversation: forged}, true)
+		if got != session_+" --continue" {
 			t.Errorf("claude_session_id %q reached the command line: %q", forged, got)
 		}
 	}
-	if got := agentArgs(cfg, ag, session.Meta{Conversation: id}, false); got != "" {
+	if got := args(session.Meta{Conversation: id}, false); got != session_ {
 		t.Fatalf("a new session resumes nothing: %q", got)
+	}
+	// The session files are written, outside the repository.
+	if _, err := os.Stat(filepath.Join(cfg.RunDir, "claude-settings.json")); err != nil {
+		t.Fatal("the settings file was not written")
+	}
+	if entries, _ := os.ReadDir(cfg.Root); len(entries) != 0 {
+		t.Fatalf("the repository was written to: %v", entries)
 	}
 
 	// The name is one argument, whatever it holds.
 	for _, name := range []string{"fix the login", "--dangerously-skip-permissions", "it's; rm -rf ~", "$(id)"} {
-		args := agentArgs(cfg, ag, session.Meta{Name: name}, false)
-		out, err := exec.Command("/bin/sh", "-c", `for a in`+args+`; do printf '%s\n' "$a"; done`).Output()
+		got := args(session.Meta{Name: name}, false)
+		out, err := exec.Command("/bin/sh", "-c", `for a in`+got+`; do printf '%s\n' "$a"; done`).Output()
 		if err != nil {
-			t.Fatalf("%q: %v", args, err)
+			t.Fatalf("%q: %v", got, err)
 		}
-		if got := strings.TrimSuffix(string(out), "\n"); got != "--name="+name {
-			t.Errorf("name %q became the arguments %q", name, got)
+		lines := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+		if lines[len(lines)-1] != "--name="+name {
+			t.Errorf("name %q became the arguments %q", name, lines)
 		}
 	}
 
 	cfg.ClaudeArgs = "--model opus"
-	if got := agentArgs(cfg, ag, session.Meta{}, false); got != " --model opus" {
+	if got := args(session.Meta{}, false); got != session_+" --model opus" {
 		t.Fatalf("the engineer's own arguments: %q", got)
 	}
 }

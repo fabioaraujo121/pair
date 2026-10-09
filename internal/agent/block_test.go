@@ -1,41 +1,19 @@
 package agent
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
-func TestPairingBlockLanguage(t *testing.T) {
-	pt := PairingBlock("pt")
-	if !strings.Contains(pt, "Speak Portuguese.") || !strings.HasPrefix(pt, blockStart) || !strings.HasSuffix(pt, blockEnd+"\n") {
-		t.Fatalf("block:\n%s", pt)
+func TestRemoveBlock(t *testing.T) {
+	block := "<!-- pair:start -->\n## Pairing mode\nrules\n<!-- pair:end -->\n"
+	if out, had := RemoveBlock(block); !had || out != "" {
+		t.Fatalf("a file of only the block empties: %q %v", out, had)
 	}
-	if !strings.Contains(PairingBlock("xx"), "Speak xx.") {
-		t.Fatal("unknown codes fall back to the code")
+	if out, had := RemoveBlock("# Mine\n\ntext\n\n" + block); !had || out != "# Mine\n\ntext\n" {
+		t.Fatalf("the block at the end: %q %v", out, had)
 	}
-	for _, tool := range []string{"`narrate`", "`show`", "`ask`", "PAIRING.md"} {
-		if !strings.Contains(pt, tool) {
-			t.Fatalf("block must mention %s", tool)
-		}
+	if out, had := RemoveBlock(block + "\n# After\ntext\n"); !had || out != "\n# After\ntext\n" {
+		t.Fatalf("the block at the start: %q %v", out, had)
 	}
-}
-
-func TestUpsertBlock(t *testing.T) {
-	block := PairingBlock("pt")
-	if got := UpsertBlock("", block); got != block {
-		t.Fatalf("empty file: %q", got)
-	}
-	existing := "# My project\n\nRun `bin/setup` first."
-	once := UpsertBlock(existing, block)
-	if !strings.HasPrefix(once, existing+"\n\n"+blockStart) {
-		t.Fatalf("append: %q", once)
-	}
-	twice := UpsertBlock(once, block)
-	if twice != once {
-		t.Fatalf("not idempotent:\n%s\n---\n%s", once, twice)
-	}
-	updated := UpsertBlock(once+"\n## After\ntext\n", PairingBlock("en"))
-	if strings.Count(updated, blockStart) != 1 || !strings.Contains(updated, "Speak English.") || strings.Contains(updated, "Speak Portuguese.") || !strings.HasSuffix(updated, "## After\ntext\n") {
-		t.Fatalf("replace in the middle:\n%s", updated)
+	if out, had := RemoveBlock("# Mine\n"); had || out != "# Mine\n" {
+		t.Fatalf("no block: untouched: %q %v", out, had)
 	}
 }

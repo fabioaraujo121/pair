@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,10 +12,11 @@ import (
 	"github.com/fabioaraujo121/pair/internal/config"
 )
 
-// Init prepares the current repository for pairing: the agent's hooks,
-// instructions and MCP server registration, a PAIRING.md scratchpad,
-// .gitignore entries, and the Neovim plugin under ~/.pair/nvim. Re-running
-// it is safe.
+// Init saves the engineer's settings (agent, language, voice) and installs
+// what pair keeps under ~/.pair: the Neovim plugin and the hotkey file.
+// Nothing is written into the repository: the agent gets its hooks,
+// instructions and MCP server at `pair start`, for that process only.
+// Re-running it is safe.
 func Init(args []string) error {
 	settings := map[string]string{}
 	agentName := ""
@@ -71,31 +73,10 @@ func Init(args []string) error {
 	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = resolved
 	}
-
-	if err := ag.Install(agent.Install{Root: cfg.Root, Exe: exe, Lang: cfg.Lang, AskTimeout: cfg.AskWait + cfg.AskMax + 120}, os.Stdout); err != nil {
-		return err
-	}
-
-	scratch := filepath.Join(cfg.Root, "PAIRING.md")
-	if _, err := os.Stat(scratch); os.IsNotExist(err) {
-		if err := os.WriteFile(scratch, []byte(pair.PairingTemplate), 0o644); err != nil {
-			return err
-		}
-		fmt.Println("✓ PAIRING.md created")
+	if left := ag.Leftovers(cfg.Root); len(left) > 0 {
+		fmt.Printf("! an earlier version of pair wrote into this repository: %s\n  run `pair uninstall` once to take it out\n", strings.Join(left, ", "))
 	} else {
-		fmt.Println("• PAIRING.md already exists, left as is")
-	}
-
-	ignores := []string{".pair/"}
-	if os.Getenv("PAIR_TRACK_SCRATCHPAD") == "" {
-		ignores = append(ignores, "PAIRING.md")
-	}
-	added, err := ensureGitignore(filepath.Join(cfg.Root, ".gitignore"), ignores)
-	if err != nil {
-		return err
-	}
-	if len(added) > 0 {
-		fmt.Printf("✓ .gitignore: added %s\n", strings.Join(added, ", "))
+		fmt.Println("• nothing is written into the repository: the agent gets pair's hooks and instructions at `pair`, for that session only")
 	}
 
 	pluginDir, err := InstallPlugin(cfg.UserDir)
@@ -121,9 +102,74 @@ with Hammerspoon: add to ~/.hammerspoon/init.lua
 
   dofile(os.getenv("HOME") .. "/.pair/hammerspoon.lua")
 
-Next: run `+"`pair`"+` to start a session. In the session: F5 to talk, F6 to interrupt.
+Next: run `+"`pair`"+` in a repository to start a session. In the session: F5 to talk, F6 to interrupt.
 `, pluginDir)
 	return nil
+}
+
+// Uninstall takes out of the current repository what earlier versions of
+// pair wrote there: hooks, pairing blocks, MCP registrations, the old
+// scratchpad's .gitignore line. Nothing of the kind is written any more.
+func Uninstall(w io.Writer) error {
+	cfg := config.Load("")
+	before := len(leftovers(cfg.Root))
+	for _, name := range agent.Names() {
+		ag, _ := agent.For(name)
+		if err := ag.Uninstall(cfg.Root, w); err != nil {
+			return err
+		}
+	}
+	if changed, err := dropGitignoreLines(filepath.Join(cfg.Root, ".gitignore"), "# pair session state", ".pair/", "PAIRING.md"); err != nil {
+		return err
+	} else if changed {
+		fmt.Fprintln(w, "✓ .gitignore: pair's lines removed (.pair ignores itself)")
+	}
+	if before == 0 {
+		fmt.Fprintf(w, "nothing of pair's in %s\n", tildePath(cfg.Root))
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Root, "PAIRING.md")); err == nil {
+		fmt.Fprintln(w, "• PAIRING.md at the root was the scratchpad of earlier versions; the scratchpad is .pair/PAIRING.md now. Keep or delete it as you like")
+	}
+	return nil
+}
+
+// leftovers lists what every agent's adapter finds of earlier versions.
+func leftovers(root string) []string {
+	var all []string
+	for _, name := range agent.Names() {
+		ag, _ := agent.For(name)
+		all = append(all, ag.Leftovers(root)...)
+	}
+	return all
+}
+
+// dropGitignoreLines removes the given lines from a .gitignore when they
+// are there, and the file when nothing else was.
+func dropGitignoreLines(path string, lines ...string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, nil
+	}
+	drop := map[string]bool{}
+	for _, l := range lines {
+		drop[l] = true
+	}
+	var kept []string
+	changed := false
+	for _, l := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+		if drop[strings.TrimSpace(l)] {
+			changed = true
+			continue
+		}
+		kept = append(kept, l)
+	}
+	if !changed {
+		return false, nil
+	}
+	if strings.TrimSpace(strings.Join(kept, "")) == "" {
+		return true, os.Remove(path)
+	}
+	return true, os.WriteFile(path, []byte(strings.Join(kept, "\n")+"\n"), 0o644)
 }
 
 // otherAgent names an agent that is not this one, for the hint.

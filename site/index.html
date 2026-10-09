@@ -246,7 +246,7 @@ footer a { color: var(--ink-2); }
     <ul class="chips" aria-label="Works with">
       <li class="chip">macOS 14+</li><li class="chip">tmux</li><li class="chip">Neovim</li><li class="chip">Claude Code</li><li class="chip">Codex</li>
     </ul>
-    <p class="plain">Then, in a repository: <code>pair init</code>, then <code>pair</code>. <a href="#how">How it works</a></p>
+    <p class="plain">Then, in a repository: <code>pair</code>. Nothing is written into the repository. <a href="#how">How it works</a></p>
   </div>
 
   <section class="stage" id="screen" aria-labelledby="screen-h">
@@ -356,6 +356,7 @@ README.md</div>
         <li><span><strong>The microphone</strong> opens only when you press F5, and closes when you pause or press it again.</span></li>
         <li><span><strong>The agent's own conversation</strong> still goes to its provider, Claude Code to Anthropic and Codex to OpenAI, as it does without pair. pair sends nothing anywhere. Turn Wi-Fi off and press F5: the transcript still arrives; only the agent's reply waits for the network.</span></li>
         <li><span><strong>Downloads</strong> are pinned and SHA-256 verified.</span></li>
+        <li><span><strong>Your repository</strong> is left as it is. What pair keeps for a session, the scratchpad included, lives in <code>.pair/</code>, which ignores itself in git.</span></li>
         <li><span><strong>The source</strong> is private for now. The releases, their checksums and the Homebrew cask are public.</span></li>
       </ul>
     </div>
@@ -368,11 +369,11 @@ README.md</div>
       <div class="cols">
         <div class="step">
           <h3>Pick one</h3>
-          <p>Claude Code by default; <code>pair init --agent codex</code> picks Codex CLI. A session remembers its agent.</p>
+          <p>Claude Code by default; <code>pair init --agent codex</code> makes Codex CLI the default, <code>pair --agent codex</code> picks it for one session. A session remembers its agent.</p>
         </div>
         <div class="step">
           <h3>How it connects</h3>
-          <p>pair uses the agent's hooks (before and after edits, at prompts, at the end of a turn, at permission prompts) and gives it three MCP tools, <code>narrate</code>, <code>show</code> and <code>ask</code>. An instructions block in CLAUDE.md or AGENTS.md tells it how to pair. No fork of the agent, no daemon, no cloud.</p>
+          <p>When pair starts the agent, it hands it hooks (before and after edits, at prompts, at the end of a turn, at permission prompts), three MCP tools, <code>narrate</code>, <code>show</code> and <code>ask</code>, and the rules of pairing, for that process only. Nothing is written into the repository, and an agent you open without pair knows nothing of it. No fork of the agent, no daemon, no cloud.</p>
         </div>
         <div class="step">
           <h3>Sessions</h3>
@@ -411,8 +412,7 @@ README.md</div>
       <p class="plain">Then, in a repository:</p>
       <div class="install">
         <div class="head"><span>in a repository</span><button class="copy" type="button" data-copy="repo-cmd" hidden>copy</button></div>
-        <pre id="repo-cmd" tabindex="0" aria-label="commands to run in a repository"><code><span class="p">$ </span>pair init              <span class="c"># or: pair init --agent codex</span>
-<span class="p">$ </span>pair</code></pre>
+        <pre id="repo-cmd" tabindex="0" aria-label="commands to run in a repository"><code><span class="p">$ </span>pair                   <span class="c"># Claude Code; pair init --agent codex switches to Codex</span></code></pre>
       </div>
     </div>
   </section>

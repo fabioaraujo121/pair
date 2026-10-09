@@ -15,23 +15,20 @@ func decode(t *testing.T, b []byte) map[string]any {
 	return m
 }
 
-func TestMergeSettingsFromScratchIsIdempotent(t *testing.T) {
-	first, err := MergeClaudeSettings(nil, "/opt/homebrew/bin/pair")
+func TestClaudeSettingsHoldOnlyPairs(t *testing.T) {
+	first, err := ClaudeSettings("/opt/homebrew/bin/pair")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := MergeClaudeSettings(first, "/opt/homebrew/bin/pair")
-	if err != nil {
-		t.Fatal(err)
-	}
+	second, _ := ClaudeSettings("/opt/homebrew/bin/pair")
 	if string(first) != string(second) {
-		t.Fatalf("not idempotent:\n%s\n---\n%s", first, second)
+		t.Fatal("not deterministic")
 	}
 	m := decode(t, first)
 	hooks := m["hooks"].(map[string]any)
 	pre := hooks["PreToolUse"].([]any)
 	if len(pre) != 2 {
-		t.Fatalf("PreToolUse groups = %d, want activity + pre_edit", len(pre))
+		t.Fatalf("PreToolUse groups = %d, want 2 (activity, pre_edit)", len(pre))
 	}
 	if _, has := pre[0].(map[string]any)["matcher"]; has {
 		t.Fatal("the activity hook covers every tool: no matcher")
@@ -47,13 +44,12 @@ func TestMergeSettingsFromScratchIsIdempotent(t *testing.T) {
 	if _, has := hooks["Stop"].([]any)[0].(map[string]any)["matcher"]; has {
 		t.Fatal("Stop hook must not carry a matcher")
 	}
-	allow := m["permissions"].(map[string]any)["allow"].([]any)
-	if len(allow) != 3 {
-		t.Fatalf("allow = %v", allow)
+	if len(m) != 2 {
+		t.Fatalf("only hooks and permissions belong in a session's settings: %v", m)
 	}
 }
 
-func TestMergeSettingsPreservesOtherHooksAndReplacesOurs(t *testing.T) {
+func TestWithoutClaudeSettingsKeepsTheRest(t *testing.T) {
 	existing := `{
   "permissions": {"allow": ["Bash(npm test)", "mcp__pair__ask"], "deny": ["Bash(rm -rf:*)"]},
   "hooks": {
@@ -65,37 +61,38 @@ func TestMergeSettingsPreservesOtherHooksAndReplacesOurs(t *testing.T) {
   },
   "model": "opus"
 }`
-	out, err := MergeClaudeSettings([]byte(existing), "/new/pair")
-	if err != nil {
-		t.Fatal(err)
+	out, changed, err := withoutClaudeSettings([]byte(existing))
+	if err != nil || !changed {
+		t.Fatal(err, changed)
 	}
 	m := decode(t, out)
 	if m["model"] != "opus" {
 		t.Fatal("unrelated keys must survive")
 	}
 	perms := m["permissions"].(map[string]any)
-	if len(perms["deny"].([]any)) != 1 {
-		t.Fatal("deny list must survive")
-	}
-	allow := perms["allow"].([]any)
-	if len(allow) != 4 { // npm test + ask (kept once) + narrate + show
-		t.Fatalf("allow = %v", allow)
+	if len(perms["deny"].([]any)) != 1 || len(perms["allow"].([]any)) != 1 {
+		t.Fatalf("permissions: %v", perms)
 	}
 	pre := m["hooks"].(map[string]any)["PreToolUse"].([]any)
-	if len(pre) != 4 {
-		t.Fatalf("PreToolUse groups = %d, want audit + lint + our two: %s", len(pre), out)
-	}
-	if pre[0].(map[string]any)["matcher"] != "Bash" {
-		t.Fatal("audit group must be first and untouched")
+	if len(pre) != 2 {
+		t.Fatalf("PreToolUse groups = %d, want audit + lint: %s", len(pre), out)
 	}
 	lint := pre[1].(map[string]any)["hooks"].([]any)
 	if len(lint) != 1 || lint[0].(map[string]any)["command"] != "lint" {
 		t.Fatalf("old pair entry must be removed from the shared group, lint kept: %v", lint)
 	}
-	if strings.Count(string(out), "hook pre_edit") != 1 {
-		t.Fatalf("exactly one pre_edit hook expected:\n%s", out)
+	if strings.Contains(string(out), "hook pre_edit") {
+		t.Fatalf("a pair hook survived:\n%s", out)
 	}
-	if _, err := MergeClaudeSettings([]byte("{oops"), "/new/pair"); err == nil {
+	same, changed, err := withoutClaudeSettings([]byte(`{"model":"opus"}`))
+	if err != nil || changed || string(same) != `{"model":"opus"}` {
+		t.Fatalf("nothing of pair's: must come back untouched: %s %v %v", same, changed, err)
+	}
+	gone, changed, _ := withoutClaudeSettings([]byte(`{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/p/pair hook stop"}]}]},"permissions":{"allow":["mcp__pair__narrate"]}}`))
+	if !changed || gone != nil {
+		t.Fatalf("only pair's content: the file must go: %s", gone)
+	}
+	if _, _, err := withoutClaudeSettings([]byte("{oops")); err == nil {
 		t.Fatal("invalid existing JSON must be refused, not overwritten")
 	}
 }

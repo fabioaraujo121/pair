@@ -136,20 +136,27 @@ Spoken Content → Manage Voices; select one with `pair init --voice "Ava
 
 ```sh
 cd your-repo
-pair init   # hooks + permissions in .claude/settings.json, CLAUDE.md block,
-            # MCP server registration, PAIRING.md, .gitignore entries
 pair        # opens the tmux session and attaches
 ```
 
-`pair init` is idempotent and keeps whatever else is in your settings. The
+Nothing is written into the repository. The agent gets pair's hooks, the
+MCP server and the pairing instructions when `pair` starts it, for that
+process only: a Claude Code or Codex you open without pair, in the same
+repository, is exactly as it would be anywhere else. What pair keeps for a
+session lives in `.pair/`, which ignores itself in git. `pair init` only
+saves your settings and installs the Neovim plugin under `~/.pair`. The
 first `pair` in a repository shows Claude Code's trust dialog; accept it
 (its default is "No, exit").
+
+Earlier versions wrote hooks, a `CLAUDE.md` block and an MCP registration
+into the repository. `pair uninstall` takes them out; `pair` refuses to
+start while they are there, since the hooks would run twice.
 
 In the session:
 
 1. Press `F5` (or click `🎙 talk` in the status bar) and say the task, or
    press `F7` and type it in Claude's pane. Claude writes the plan and open questions to
-   `PAIRING.md` before touching code.
+   `.pair/PAIRING.md` before touching code.
 2. Before each change Claude calls `narrate`. An attention sound plays
    first when it has been quiet for a while, then one or two sentences are
    spoken. The same text lands in the activity log.
@@ -161,7 +168,7 @@ In the session:
 4. When something is ambiguous Claude calls `ask`: a distinct sound, then
    the question. The microphone stays closed. Press `F5` or click `🎙 talk`
    to answer; the transcript goes back to Claude as the answer and the
-   decision lands in `PAIRING.md`.
+   decision lands in `.pair/PAIRING.md`.
 5. `F6` interrupts at any time: speech stops, Claude's turn is cancelled,
    and the mic opens for you.
 6. Edit files yourself whenever you like. Your next prompt carries a diff of
@@ -208,7 +215,7 @@ pair replay checkout          # play one back
 - Continuing or opening a session resumes the exact Claude Code
   conversation it had, so what you see in the activity column is what
   Claude remembers. The session's name is also given to Claude Code.
-- `PAIRING.md` and your code are shared by all sessions of the repository.
+- `.pair/PAIRING.md`, the scratchpad, and your code are shared by all sessions of the repository.
 - The running session writes to `.pair/events.jsonl`; the others live in
   `.pair/sessions/<id>/`. Deleting a folder there deletes that session.
 
@@ -232,7 +239,7 @@ inside a pair session, and that conversation writes nothing to it.
 | Anywhere in the session | mouse click, `C-b` + arrows | switch pane |
 | Neovim | `<leader>pt` / `<leader>pi` | same as `F5` / `F6` |
 | Neovim (visual) | `<leader>pp` | point Claude at the selected lines, with an optional note |
-| Neovim | `<leader>ps` | show `PAIRING.md` in the editor, or go back to the file |
+| Neovim | `<leader>ps` | show the scratchpad `.pair/PAIRING.md` in the editor, or go back to the file |
 | Neovim tree | `Enter` | open the file in the editor window |
 | Outside the terminal | ctrl+alt+cmd+space / esc | push-to-talk / interrupt, with Hammerspoon |
 
@@ -254,7 +261,8 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair sessions` | list the sessions of this repository |
 | `pair resume <id or name>` | open a past session again, with Claude's conversation |
 | `pair rename [<id or name>] <new name>` | name a session |
-| `pair init [--agent claude\|codex] [--lang en] [--voice Samantha] [--rate 190]` | prepare the repository (see above) and save your agent and voice settings |
+| `pair init [--agent claude\|codex] [--lang en] [--voice Samantha] [--rate 190]` | save your agent and voice settings, install the Neovim plugin; nothing goes into the repository |
+| `pair uninstall` | remove what earlier versions wrote into the repository |
 | `pair voice [setup kokoro \| use \| list \| test]` | which voice speaks; install and choose a natural one |
 | `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
 | `pair agent` | show or hide the agent's pane (what `F7` runs); `pair claude` still works |
@@ -273,12 +281,15 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
   `narrate` and `ask` stay blocking instead of being moved to a background
   task after two minutes.
 - **MCP tools** `narrate`, `show`, `ask` live in `pair mcp`, a stdio server
-  registered per project with the absolute binary path. All speech and
+  the agent is told about at launch (`--mcp-config` for Claude Code, a
+  profile and `-c` override for Codex), never registered. All speech and
   listening go through one mutex. When you press Escape, Claude Code cancels
   the request; the handler's context is cancelled within ~100 ms and `pair`
   terminates `say` or `rec` itself.
-- **Hooks** in `.claude/settings.json`: `PreToolUse` (`Edit|Write`) jumps
-  and highlights, `PostToolUse` reloads and logs the diff through `delta`,
+- **Hooks**, given to the agent at launch (`--settings` for Claude Code, the
+  profile for Codex) and kept under `~/.pair/run/<session>/`: `SessionStart`
+  adds the pairing instructions as context, `PreToolUse` (`Edit|Write`)
+  jumps and highlights, `PostToolUse` reloads and draws the change,
   `UserPromptSubmit` injects your hand edits, `Stop` hands you the turn,
   `Notification` raises an alert when Claude waits on a permission prompt.
   Each one also updates the status bar.
@@ -322,7 +333,8 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 Settings come from, in order: the environment, `<repo>/.pair/config`,
 `~/.pair/config`, the default. The files hold `KEY=VALUE` lines with the
 names below. `pair init --lang pt --voice Luciana` writes `~/.pair/config`
-for you and updates the language line in `CLAUDE.md`.
+for you; the language reaches the agent in the instructions of the next
+session.
 
 A repository is something you clone, so its file is not trusted with
 everything. `<repo>/.pair/config` can set how the session sounds and looks:
@@ -364,30 +376,30 @@ is read from the environment and from `~/.pair/config` only.
 | `PAIR_KOKORO_SPEED` | `1.0` | Kokoro pace; `1.1` is a little faster |
 | `PAIR_MUTE` | | log without speaking or listening (tests, demos) |
 | `PAIR_CLAUDE_ARGS` | | extra arguments for the agent's command, for example `--model opus` |
-| `PAIR_TRACK_SCRATCHPAD` | | set to keep `PAIRING.md` out of `.gitignore` |
 | `PAIR_DEBUG` | | print hook errors to stderr |
 
 Words whisper should know for this project (product names, domain terms):
 one per line in `.pair/vocab.txt`.
 
-The pairing-mode block that `pair init` writes to `CLAUDE.md` sits between
-`<!-- pair:start -->` and `<!-- pair:end -->`; edit it freely, `pair init`
-only replaces what is between the markers.
+The pairing instructions (`templates/pairing-block.md.tmpl`) reach the
+agent through its `SessionStart` hook at every start, resume and
+compaction, only inside a pair session. Nothing of them is in `CLAUDE.md`
+or `AGENTS.md`.
 
 ## Agents
 
 pair drives Claude Code by default. Everything on screen and aloud is the
 same whatever the agent; what differs is behind one interface,
-`internal/agent.Agent`: how the agent is launched and resumed, where its
-hooks and instructions are written, what it writes on a hook's stdin, and
-how it is interrupted.
+`internal/agent.Agent`: how the agent is launched and resumed, how its
+hooks, instructions and MCP server are handed to it, what it writes on a
+hook's stdin, and how it is interrupted.
 
 | | Claude Code | Codex CLI |
 | --- | --- | --- |
 | choose it | the default | `pair init --agent codex`, or `PAIR_AGENT=codex`, or `pair --agent codex` for one session |
-| hooks | `.claude/settings.json` | `.codex/hooks.json`, reviewed once in Codex's `/hooks` screen |
-| MCP server | `claude mcp add`, local scope | `.codex/config.toml`, pre-approved, with a tool timeout long enough for `ask` |
-| instructions | `CLAUDE.md` | `AGENTS.md` |
+| hooks | `--settings ~/.pair/run/<session>/claude-settings.json` | `-p pair`: `~/.codex/pair.config.toml`, reviewed once in Codex's `/hooks` screen |
+| MCP server | `--mcp-config ~/.pair/run/<session>/claude-mcp.json` | the same profile, pre-approved, with a tool timeout long enough for `ask`; the repository by `-c` |
+| instructions | the `SessionStart` hook, as context | the same |
 | an edit | file, old and new text, and the patch after | one `apply_patch` call, possibly several files: the first is pointed at, all are drawn |
 | continue | `claude --resume <id>` | `codex resume <id>` |
 
@@ -446,9 +458,9 @@ guessing.
 - **Narration stops after two minutes of a long `ask`**: your shell sets
   `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS`; `pair start` overrides it to `0`
   inside the session.
-- **`claude mcp` shows `pair` failed to connect**: the registration holds an
-  absolute path to the binary; re-run `pair init` after moving or
-  reinstalling it.
+- **A Claude Code opened without pair still narrates or asks**: an earlier
+  version wrote its instructions into `CLAUDE.md` and its hooks into
+  `.claude/settings.json`; run `pair uninstall` in that repository.
 
 ## Development
 

@@ -43,12 +43,13 @@ Usage:
   pair rename [<id or name>] <new name>
   pair agent         show or hide the agent's pane (hidden by default; F7 in the session)
   pair init [--agent claude|codex] [--lang en] [--voice Samantha] [--rate 190]
-                     prepare this repository: hooks, instructions block, MCP server, PAIRING.md
+                     save your settings and install the Neovim plugin; nothing goes into the repository
+  pair uninstall     remove what earlier versions of pair wrote into this repository
   pair voice         which voice speaks; "pair voice setup kokoro" installs a natural one
   pair doctor        check dependencies and configuration
                      --fix downloads the whisper model, --mic runs the microphone test
   pair stop          kill the session and any running say/rec
-  pair hook <name> [--agent <name>]   the agent's hooks: activity, pre_edit, post_edit, prompt, stop, notify
+  pair hook <name> [--agent <name>]   the agent's hooks: session, activity, pre_edit, post_edit, prompt, stop, notify
   pair hook listen   push-to-talk: record, transcribe, type into the agent's pane
   pair hook interrupt  stop the agent (Escape), then listen
   pair hook point --file f --start n [--end m] [--note t]   point the agent at a range
@@ -93,6 +94,8 @@ func main() {
 		err = cli.Rename(args, os.Stdout)
 	case "init":
 		err = cli.Init(args)
+	case "uninstall":
+		err = cli.Uninstall(os.Stdout)
 	case "doctor":
 		opts := cli.DoctorOptions{}
 		for _, a := range args {

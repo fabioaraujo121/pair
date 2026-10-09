@@ -115,10 +115,10 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 		checks = append(checks, check{"tmux session", false, true, fmt.Sprintf("%q not running (start with `pair`)", cfg.Session)})
 	}
 
-	if ok, why := ag.Registered(cfg.Root); ok {
-		checks = append(checks, check{"mcp server", false, true, "\"pair\" registered for this project with " + ag.Title()})
+	if left := ag.Leftovers(cfg.Root); len(left) > 0 {
+		checks = append(checks, check{"repository", true, false, "an earlier version of pair wrote " + strings.Join(left, ", ") + ": run `pair uninstall`"})
 	} else {
-		checks = append(checks, check{"mcp server", false, false, "\"pair\" not registered for this project: " + why})
+		checks = append(checks, check{"repository", false, true, "nothing of pair's in it; hooks and the MCP server are given to " + ag.Title() + " at `pair`"})
 	}
 
 	if v := os.Getenv("CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS"); v != "" && v != "0" {

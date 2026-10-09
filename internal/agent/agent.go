@@ -76,18 +76,18 @@ type Event struct {
 	Idle         bool   // the notification says the agent waits for input, not for a permission
 }
 
-// Launch is what a session asks of the agent's command line.
+// Launch is what a session asks of the agent's command line. Nothing is
+// written into the repository: the hooks, the MCP server and the
+// pre-approvals go to the agent as files under RunDir and flags, for that
+// process only, so an agent started without pair in the same repository
+// never sees them.
 type Launch struct {
-	Resume   string // a conversation to open again, already checked by ConversationID
-	Continue bool   // the last conversation, when Resume is empty
-	Name     string // the session's name, for agents that take one
-}
-
-// Install is what an agent needs to prepare a repository.
-type Install struct {
-	Root       string // the repository
+	Resume     string // a conversation to open again, already checked by ConversationID
+	Continue   bool   // the last conversation, when Resume is empty
+	Name       string // the session's name, for agents that take one
 	Exe        string // pair's own binary, absolute
-	Lang       string // the spoken language, for the instructions
+	Root       string // the repository
+	RunDir     string // the session's own directory under ~/.pair/run, emptied at start
 	AskTimeout int    // seconds a call to ask may take, for agents that limit tool calls
 }
 
@@ -101,26 +101,23 @@ type Agent interface {
 	Short() string
 	// Binary is the agent's command on PATH.
 	Binary() string
-	// Launch returns the arguments to start the agent for a session.
-	Launch(o Launch) []string
+	// Launch writes the files the agent needs for this session under
+	// o.RunDir, or elsewhere outside the repository, and returns the
+	// arguments to start it with.
+	Launch(o Launch) ([]string, error)
 	// Env is what the session's environment adds for this agent.
 	Env() []string
-	// Install prepares a repository: hooks, the MCP server, the
-	// instructions. It reports what it did to report.
-	Install(in Install, report io.Writer) error
-	// Installed reports whether the agent's hooks are in place in the
-	// repository, and what is missing when they are not. Without them a
-	// session shows nothing of what the agent does.
-	Installed(root string) (bool, string)
-	// Registered reports whether pair's MCP server is registered for the
-	// repository, and what to do when it is not.
-	Registered(root string) (bool, string)
-	// InstructionsFile is the file the agent reads its instructions from.
-	InstructionsFile() string
+	// Leftovers names what an earlier version of pair wrote into the
+	// repository for this agent and is still there. While any remains the
+	// hooks would run twice.
+	Leftovers(root string) []string
+	// Uninstall removes those leftovers, and reports what it did.
+	Uninstall(root string, report io.Writer) error
 	// ParseHook reads what the agent wrote on the stdin of a hook.
 	ParseHook(hook string, data []byte) (*Event, error)
 	// ContextOutput is what a hook prints to add text to the model's
-	// context.
+	// context: at a prompt ("prompt") or at the start of a session
+	// ("session").
 	ContextOutput(hook, text string) []byte
 	// InterruptKeys are the tmux key names that stop the agent's turn.
 	InterruptKeys() []string
@@ -186,7 +183,8 @@ func PeekCWD(data []byte) string {
 // Hooks are pair's hooks, in the order they are registered. An agent maps
 // the events to its own names.
 var Hooks = []HookSpec{
-	{"PreToolUse", "", "activity", 5}, // every tool: keeps the status bar saying what the agent is doing
+	{"SessionStart", "", "session", 10}, // the pairing instructions, only while a session runs
+	{"PreToolUse", "", "activity", 5},   // every tool: keeps the status bar saying what the agent is doing
 	{"PreToolUse", "Edit|Write", "pre_edit", 10},
 	{"PostToolUse", "Edit|Write", "post_edit", 15},
 	{"UserPromptSubmit", "", "prompt", 20}, // Claude Code's default for this event is 30 s; output is discarded on timeout
@@ -238,6 +236,14 @@ func hookCommandsIn(data []byte) []byte {
 // hook, and the agent the payload comes from.
 func hookCommand(exe, hook, agent string) string {
 	return shell.Quote(exe) + " hook " + hook + " --agent " + agent
+}
+
+// hookEvent is the agent's name for one of pair's hooks that adds context.
+func hookEvent(hook string) string {
+	if hook == "session" {
+		return "SessionStart"
+	}
+	return "UserPromptSubmit"
 }
 
 // contextOutput is the JSON both Claude Code and Codex read from a hook

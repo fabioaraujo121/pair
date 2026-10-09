@@ -172,7 +172,7 @@ func (s *Server) MCP() *mcp.Server {
 	}, s.show)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ask",
-		Description: "Ask the engineer one question aloud and wait for the spoken answer: the engineer opens the microphone, answers, and the transcript is returned (or \"(no answer)\" when nobody answers). One question per decision point, recommended option first, under 200 characters. Record the answer in PAIRING.md under Decisions.",
+		Description: "Ask the engineer one question aloud and wait for the spoken answer: the engineer opens the microphone, answers, and the transcript is returned (or \"(no answer)\" when nobody answers). One question per decision point, recommended option first, under 200 characters. Record the answer in .pair/PAIRING.md under Decisions.",
 	}, s.ask)
 	return srv
 }

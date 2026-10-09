@@ -75,6 +75,8 @@ func Run(name, agentName string, stdin io.Reader, stdout io.Writer) error {
 // Handle runs the handler of the event's hook.
 func (h *Handler) Handle(ev *agent.Event) error {
 	switch ev.Hook {
+	case "session":
+		return h.Session(ev)
 	case "pre_edit":
 		return h.PreEdit(ev)
 	case "post_edit":
@@ -88,7 +90,7 @@ func (h *Handler) Handle(ev *agent.Event) error {
 	case "activity":
 		return h.Activity(ev)
 	default:
-		return fmt.Errorf("unknown hook %q (want pre_edit, post_edit, stop, prompt, notify, activity)", ev.Hook)
+		return fmt.Errorf("unknown hook %q (want session, pre_edit, post_edit, stop, prompt, notify, activity)", ev.Hook)
 	}
 }
 
@@ -98,6 +100,20 @@ func (h *Handler) who() string {
 		return "Claude"
 	}
 	return h.Agent.Short()
+}
+
+// Session runs when the agent starts, resumes or compacts a conversation.
+// It hands the agent the pairing instructions as context. The hook exists
+// only in a pair session, so an agent started without pair never gets
+// them.
+func (h *Handler) Session(ev *agent.Event) error {
+	_ = h.Log.Append("agent_session", map[string]any{"session_id": ev.Conversation})
+	ag := h.Agent
+	if ag == nil {
+		ag = agent.Claude{}
+	}
+	_, err := h.Stdout.Write(ag.ContextOutput("session", agent.Instructions(h.Cfg.Lang)))
+	return err
 }
 
 // PreEdit points Neovim at the range the agent is about to change. When
