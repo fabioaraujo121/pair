@@ -63,6 +63,7 @@ type Config struct {
 	AskMic       string  // PAIR_ASK_MIC: manual (the engineer opens the mic) or auto
 	AskWait      int     // PAIR_ASK_WAIT seconds
 	Cue          bool    // PAIR_CUE=off disables the attention sound before speech
+	Ack          bool    // PAIR_ACK=off disables the spoken acknowledgement after you talk
 	CueIdle      int     // PAIR_CUE_IDLE seconds
 	KokoroVoice  string  // PAIR_KOKORO_VOICE; by language when empty
 	KokoroSpeed  float64 // PAIR_KOKORO_SPEED, 1.0 is the natural pace
@@ -140,6 +141,7 @@ func Load(cwd string) Config {
 		AskMic:       str("PAIR_ASK_MIC", "manual"),
 		AskWait:      num("PAIR_ASK_WAIT", DefaultAskWait),
 		Cue:          str("PAIR_CUE", "on") != "off",
+		Ack:          str("PAIR_ACK", "on") != "off",
 		CueIdle:      num("PAIR_CUE_IDLE", DefaultCueIdle),
 		KokoroVoice:  str("PAIR_KOKORO_VOICE", ""),
 		KokoroSpeed:  float(str("PAIR_KOKORO_SPEED", ""), 1.0),
@@ -172,7 +174,7 @@ var repoSettings = map[string]bool{
 	"PAIR_HIGHLIGHT_TTL": true, "PAIR_DIFF_LIMIT": true,
 	"PAIR_SILENCE_SECS": true, "PAIR_SILENCE_LEVEL": true,
 	"PAIR_ASK_MAX": true, "PAIR_ASK_WAIT": true,
-	"PAIR_CUE": true, "PAIR_CUE_IDLE": true,
+	"PAIR_CUE": true, "PAIR_CUE_IDLE": true, "PAIR_ACK": true,
 	"PAIR_LOG_WIDTH": true, "PAIR_CLAUDE_HEIGHT": true, "PAIR_PRESENCE_HEIGHT": true,
 	"PAIR_CLAUDE": true,
 }
