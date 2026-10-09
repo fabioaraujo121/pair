@@ -178,9 +178,6 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 		_ = log.Session("🎙 (nothing sent: " + heard.Dropped + ")")
 		if inSession {
 			tmux.Message(cfg.Session, "🎙 nothing sent: "+heard.Dropped)
-			if heard.Dropped != "same sentence as a moment ago, not sent twice" {
-				acknowledge(cfg, speech.AckMissed)
-			}
 		}
 		fmt.Fprintf(out, "(nothing sent: %s)\n", heard.Dropped)
 		return nil
@@ -192,7 +189,7 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 		}
 		if inSession {
 			tmux.Message(cfg.Session, "👤 answered: "+heard.Text)
-			acknowledge(cfg, speech.AckAnswer)
+			sent(cfg)
 		}
 		fmt.Fprintln(out, heard.Text)
 		return nil
@@ -204,36 +201,19 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 			return fmt.Errorf("transcribed %q but could not send it to %s: %v", heard.Text, status.Who(cfg), err)
 		}
 		tmux.Message(cfg.Session, "🎙 sent: "+heard.Text)
-		acknowledge(cfg, speech.AckPrompt)
+		sent(cfg)
 	}
 	fmt.Fprintln(out, heard.Text)
 	return nil
 }
 
-// acknowledge says, in the agent's voice, that the words arrived: the
-// gap before the agent's first sentence is the longest silence of a
-// session. It is spoken after the transcript is on its way, so it delays
-// nothing, and it is tracked like any speech, so F5 or F6 cut it short.
-func acknowledge(cfg config.Config, kind speech.AckKind) {
-	if cfg.Mute {
-		return
+// sent is the soft tick that says the words went through. The agent's
+// own first sentence, a few seconds later, is the acknowledgement that
+// means something; a canned phrase in its voice sounded like a machine.
+func sent(cfg config.Config) {
+	if !cfg.Mute && cfg.Cue {
+		chime("Pop")
 	}
-	if !cfg.Ack {
-		if kind != speech.AckMissed {
-			chime("Pop") // the words went through, nothing more
-		}
-		return
-	}
-	speaker, err := speech.NewSpeaker(cfg)
-	if err != nil {
-		return
-	}
-	if closer, ok := speaker.(interface{ Close() }); ok {
-		defer closer.Close()
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	_ = speech.Acknowledge(ctx, speaker, cfg.RunDir, cfg.Lang, kind)
 }
 
 // repeatWindow is how long an identical transcript counts as a repeat.

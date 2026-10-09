@@ -342,14 +342,6 @@ func (s *Server) speakLocked(ctx context.Context, raw, kind string) (map[string]
 		s.Cue(ctx, kind)
 		cued = true
 	}
-	// An acknowledgement from the push-to-talk hook may still be playing:
-	// wait for it rather than talk over it.
-	floorCtx, cancelFloor := context.WithTimeout(ctx, 4*time.Second)
-	floor, floorErr := speech.AcquireFloor(floorCtx, s.Cfg.RunDir, true)
-	cancelFloor()
-	if floorErr == nil {
-		defer floor.Release()
-	}
 	start := time.Now()
 	var err error
 	if prepared != nil {
