@@ -153,3 +153,39 @@ func TestWhatIsPrintedCannotDriveTheTerminal(t *testing.T) {
 		t.Fatalf("the viewer lost its own colours:\n%q", got)
 	}
 }
+
+// At the end of a turn the column says how much of it was speech: the
+// speech budget is half of a session's wall time, and the share is how the
+// engineer sees it. A short turn says nothing, and the time the engineer
+// took to answer a question is not speech.
+func TestYourTurnCarriesTheSpeechShare(t *testing.T) {
+	pinZone(t)
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	_ = os.WriteFile(path, []byte(`{"ts":"2026-11-16T10:00:00-03:00","type":"listen","payload":{"heard":{"text":"hide scheduled posts from the feed","seconds":2.4}}}
+{"ts":"2026-11-16T10:00:00.5-03:00","type":"prompt","payload":{"text":"hide scheduled posts from the feed"}}
+{"ts":"2026-11-16T10:00:20-03:00","type":"narrate","payload":{"text":"Adding a published scope to Post.","ms":6000}}
+{"ts":"2026-11-16T10:00:30-03:00","type":"question","payload":{"text":"Authors still see them? I recommend yes."}}
+{"ts":"2026-11-16T10:00:44-03:00","type":"listen","payload":{"answers":true,"heard":{"text":"yes, authors only","seconds":1.1}}}
+{"ts":"2026-11-16T10:00:44.2-03:00","type":"ask","payload":{"text":"Authors still see them? I recommend yes.","ms":4000,"listen_ms":10000,"answer":{"text":"yes, authors only"}}}
+{"ts":"2026-11-16T10:00:50-03:00","type":"stop","payload":{}}
+{"ts":"2026-11-16T10:01:00-03:00","type":"prompt","payload":{"text":"typed by hand"}}
+{"ts":"2026-11-16T10:01:05-03:00","type":"narrate","payload":{"text":"Done.","ms":2000}}
+{"ts":"2026-11-16T10:01:10-03:00","type":"stop","payload":{}}
+`), 0o644)
+	var out bytes.Buffer
+	if err := Render(path, "/repo", &out, 60, false); err != nil {
+		t.Fatal(err)
+	}
+	text := out.String()
+	// 50 s from the push-to-talk to the stop, 6 s of narration and 4 s of
+	// question: 20%. The 10 s the engineer took to answer would make it 40%.
+	if !strings.Contains(text, "· your turn · speech 20%") {
+		t.Fatalf("share missing in:\n%s", text)
+	}
+	if n := strings.Count(text, "· your turn"); n != 2 {
+		t.Fatalf("your turn shown %d times in:\n%s", n, text)
+	}
+	if n := strings.Count(text, "speech"); n != 1 {
+		t.Fatalf("the 10 s turn must not carry a share:\n%s", text)
+	}
+}

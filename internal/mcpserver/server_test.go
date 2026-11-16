@@ -132,8 +132,8 @@ func TestToolsAreListedWithSchemas(t *testing.T) {
 		if names[want] == nil {
 			t.Fatalf("tool %s missing from %v", want, names)
 		}
-		if want != "show" && !strings.Contains(names[want].Description, "200") {
-			t.Fatalf("%s description must state the length target: %q", want, names[want].Description)
+		if d := names[want].Description; !strings.Contains(d, "120") || !strings.Contains(d, "six seconds") {
+			t.Fatalf("%s description must state the length target: %q", want, d)
 		}
 	}
 }

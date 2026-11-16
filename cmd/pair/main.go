@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/term"
 
+	"github.com/fabioaraujo121/pair/internal/captions"
 	"github.com/fabioaraujo121/pair/internal/cli"
 	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/hook"
@@ -55,6 +56,7 @@ Usage:
   pair hook point --file f --start n [--end m] [--note t]   point the agent at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by the agent)
   pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]   play a session back
+  pair captions [<id or name>] [--srt|--vtt] [--out file]   the spoken words of a session as subtitles
   pair log [--follow] [<id or name>]   a session as a conversation (the activity column)
   pair presence      the animated state indicator (the panel above the activity column)
   pair version
@@ -131,6 +133,8 @@ func main() {
 		err = serveMCP(args)
 	case "replay":
 		err = runReplay(args)
+	case "captions":
+		err = runCaptions(args)
 	case "log":
 		err = runLog(args)
 	case "presence":
@@ -221,6 +225,57 @@ func runReplay(args []string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return replay.Run(ctx, events, opts)
+}
+
+// runCaptions writes the spoken words of a session as subtitles: `pair
+// captions [<id or name>] [--srt|--vtt] [--out file]`. Times count from the
+// session's first event; the recording of a demo starts earlier, so the
+// file is shifted in the edit (see DEMO.md).
+func runCaptions(args []string) error {
+	cfg := config.Load("")
+	path := filepath.Join(cfg.StateDir, "events.jsonl")
+	write, outPath := captions.WriteSRT, ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--srt":
+			write = captions.WriteSRT
+		case "--vtt":
+			write = captions.WriteVTT
+		case "--out":
+			if i+1 >= len(args) {
+				return fmt.Errorf("usage: pair captions [<id or name>] [--srt|--vtt] [--out file]")
+			}
+			i++
+			outPath = args[i]
+		default:
+			p, err := sessionFile(args[i])
+			if err != nil {
+				return err
+			}
+			path = p
+		}
+	}
+	events, err := replay.Load(path)
+	if err != nil {
+		return err
+	}
+	cues := captions.Build(events, captions.AgentIn(filepath.Dir(path)))
+	out := io.Writer(os.Stdout)
+	if outPath != "" {
+		f, err := os.Create(outPath)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		out = f
+	}
+	if err := write(out, cues); err != nil {
+		return err
+	}
+	if outPath != "" {
+		fmt.Fprintf(os.Stderr, "%d cues written to %s\n", len(cues), outPath)
+	}
+	return nil
 }
 
 // runLog shows the session as a conversation: `pair log [--follow] [file]`.
