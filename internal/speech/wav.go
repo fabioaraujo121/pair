@@ -13,6 +13,7 @@ import (
 type Audio struct {
 	Seconds float64
 	RMS     float64 // 0..1, relative to full scale
+	Peak    float64 // 0..1, the loudest sample: what sox's silence threshold is compared with
 	Rate    int
 	Bits    int // sample size; whisper-cli only reads 16-bit files
 }
@@ -81,12 +82,13 @@ func AnalyzeWAV(path string) (Audio, error) {
 		return Audio{}, fmt.Errorf("unsupported WAV encoding (format tag %d)", format)
 	}
 	n := len(pcm) / width
-	var sumsq float64
+	var sumsq, peak float64
 	for i := 0; i < n; i++ {
 		s := sample(pcm[i*width:], width, format)
 		sumsq += s * s
+		peak = math.Max(peak, math.Abs(s))
 	}
-	a := Audio{Rate: rate, Bits: bits, Seconds: float64(n/channels) / float64(rate)}
+	a := Audio{Rate: rate, Bits: bits, Peak: peak, Seconds: float64(n/channels) / float64(rate)}
 	if n > 0 {
 		a.RMS = math.Sqrt(sumsq / float64(n))
 	}

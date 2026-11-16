@@ -24,7 +24,8 @@ hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "space", function()
   run({ "hook", "listen" }, "listening…")
 end)
 
--- ctrl+alt+cmd+escape: interrupt the agent, then listen
+-- ctrl+alt+cmd+escape: skip the sentence being spoken; pressed again, or
+-- when nothing is being spoken, interrupt the agent and listen
 hs.hotkey.bind({ "ctrl", "alt", "cmd" }, "escape", function()
-  run({ "hook", "interrupt" }, "interrupting…")
+  run({ "hook", "interrupt" }, "interrupt")
 end)

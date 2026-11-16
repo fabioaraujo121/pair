@@ -152,15 +152,23 @@ func Frame(st status.Status, frame, width int, now time.Time, color bool) []stri
 	}
 
 	label := status.Label(st.State, st.Agent)
+	talk := st.TalkKey // the configured key; F5 for a status written without one
+	if talk == "" {
+		talk = "F5"
+	}
 	switch st.State {
 	case tmux.StateIdle:
-		label += " · press F5 or click talk"
+		label += " · press " + talk + " or click talk"
 	case tmux.StateAsking:
-		label += " · press F5 to answer"
+		label += " · press " + talk + " to answer"
 	case tmux.StateListening:
-		label += " · pause or press F5 to send"
+		label += " · pause or press " + talk + " to send"
 	case tmux.StateAttention:
-		label += " · press F7"
+		show := st.AgentKey
+		if show == "" {
+			show = "F7"
+		}
+		label += " · press " + show
 	}
 	elapsed := ""
 	switch {

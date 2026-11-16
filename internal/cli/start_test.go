@@ -148,3 +148,69 @@ func TestVimQuotingOfPaths(t *testing.T) {
 		t.Fatalf("vimOption: %s", got)
 	}
 }
+
+// The keys are the engineer's: the session binds the configured ones and
+// the status bar names them, so what is shown is what works.
+func TestSessionChromeBindsTheConfiguredKeys(t *testing.T) {
+	bound := func(steps [][]string) map[string]string {
+		keys := map[string]string{}
+		for _, s := range steps {
+			switch {
+			case len(s) >= 6 && s[0] == "bind-key" && s[1] == "-n":
+				keys[s[2]] = s[5]
+			case len(s) == 4 && s[0] == "set-option" && s[2] == "status-right":
+				keys["status-right"] = s[3]
+			}
+		}
+		return keys
+	}
+
+	keys := config.Keys{Talk: "F9", Interrupt: "F10", Agent: "F11", Quit: "F12"}
+	got := bound(sessionChrome("/opt/pair", "Claude", keys))
+	for key, action := range map[string]string{"F9": "hook listen", "F10": "hook interrupt", "F11": " agent ", "F12": "hook click quit"} {
+		if !strings.Contains(got[key], action) {
+			t.Errorf("%s runs %q, want %s", key, got[key], action)
+		}
+	}
+	for _, old := range []string{"F5", "F6", "F7", "F8"} {
+		if _, ok := got[old]; ok {
+			t.Errorf("%s is still bound", old)
+		}
+		if strings.Contains(got["status-right"], old) {
+			t.Errorf("the status bar still says %s: %q", old, got["status-right"])
+		}
+	}
+	for _, label := range []string{"talk F9", "stop F9", "interrupt F10", "claude F11", "quit F12"} {
+		if !strings.Contains(got["status-right"], label) {
+			t.Errorf("the status bar lacks %q: %q", label, got["status-right"])
+		}
+	}
+
+	got = bound(sessionChrome("/opt/pair", "Codex", config.DefaultKeys()))
+	if !strings.Contains(got["F5"], "hook listen") || !strings.Contains(got["F6"], "hook interrupt") || !strings.Contains(got["F7"], " agent ") || !strings.Contains(got["F8"], "quit") {
+		t.Fatalf("the defaults are F5 to F8: %v", got)
+	}
+	if !strings.Contains(got["status-right"], "codex F7") {
+		t.Fatalf("the agent's button is named after it: %q", got["status-right"])
+	}
+}
+
+// The doctor names the keys; on a laptop it says what stands between the
+// talk key and the microphone.
+func TestDoctorKeysNote(t *testing.T) {
+	keys := config.DefaultKeys()
+	desktop := keysDetail(keys, false)
+	if !strings.HasPrefix(desktop, "talk F5, interrupt F6, agent pane F7, quit F8") || strings.Contains(desktop, "fn+") {
+		t.Fatalf("desktop: %q", desktop)
+	}
+	laptop := keysDetail(keys, true)
+	for _, want := range []string{"F5 is fn+F5", "standard function keys", "Dictation", "PAIR_KEY_TALK"} {
+		if !strings.Contains(laptop, want) {
+			t.Errorf("laptop note lacks %q: %q", want, laptop)
+		}
+	}
+	keys.Talk = "C-t"
+	if note := keysDetail(keys, true); strings.Contains(note, "fn+") || !strings.HasPrefix(note, "talk C-t") {
+		t.Fatalf("a key off the fn row needs no fn note: %q", note)
+	}
+}

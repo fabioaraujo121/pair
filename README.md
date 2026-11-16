@@ -173,7 +173,10 @@ In the session:
    press `F7` and type it in Claude's pane. A soft tick says the words
    went through; a few seconds later the agent's own first sentence says
    what it understood and what it will do first. Claude writes the plan and open questions to
-   `.pair/PAIRING.md` before touching code.
+   `.pair/PAIRING.md` before touching code. The very first session on a
+   machine opens with one sentence from pair itself, "Press F5, or fn F5
+   on a laptop, and tell me what to do"; it is never said again
+   (`PAIR_GREETING=off` skips it).
 2. Before each change Claude calls `narrate`. An attention sound plays
    first when it has been quiet for a while, then one or two sentences are
    spoken. The same text lands in the activity log.
@@ -186,8 +189,12 @@ In the session:
    the question. The microphone stays closed. Press `F5` or click `🎙 talk`
    to answer; the transcript goes back to Claude as the answer and the
    decision lands in `.pair/PAIRING.md`.
-5. `F6` interrupts at any time: speech stops, Claude's turn is cancelled,
-   and the mic opens for you.
+5. To talk while Claude is speaking, just press `F5`: the speech stops and
+   the mic opens. `F6` while Claude is speaking skips the sentence and
+   nothing else; Claude keeps working. `F6` a second time within 2 s, or
+   when nothing is being spoken, interrupts the turn: Claude's turn is
+   cancelled and the mic opens for you. That mic closes by itself if you
+   say nothing for 5 s ("nothing heard"; nothing is sent).
 6. Edit files yourself whenever you like. Your next prompt carries a diff of
    what you changed by hand.
 7. `pair stop` ends the session. `pair --continue` picks it up again later,
@@ -250,8 +257,10 @@ inside a pair session, and that conversation writes nothing to it.
 | Where | Key | Does |
 | --- | --- | --- |
 | Anywhere in the session | `F5`, `C-b t`, or click `🎙 talk` | open the mic: record, transcribe, send to Claude (or answer its question) |
+| While Claude is speaking | `F5` | barge in: the speech stops and the mic opens |
 | While the mic is open | `F5` again, or click `■ stop` | end the recording now and send what you said |
-| Anywhere in the session | `F6`, `C-b i`, or click `✋ interrupt` | interrupt Claude, then open the mic |
+| While Claude is speaking | `F6`, `C-b i`, or click `✋ interrupt` | skip the sentence; Claude keeps working |
+| A second time within 2 s, or when nothing is being spoken | `F6`, `C-b i`, or click `✋ interrupt` | interrupt Claude's turn, then open the mic; it closes after 5 s if you say nothing |
 | Anywhere in the session | `F7`, `C-b c`, or click `⌨ claude` | show Claude Code's pane under the editor, or hide it |
 | Anywhere in the session | `F8`, `C-b q`, or click `⏻ quit`, twice | end the session, the agent included: what `pair stop` does |
 | Anywhere in the session | mouse click, `C-b` + arrows | switch pane |
@@ -263,7 +272,9 @@ inside a pair session, and that conversation writes nothing to it.
 
 The Neovim leader key is `\` unless your own configuration changes it. On
 a Mac laptop, `F5` is `fn`+`F5` unless "Use F1, F2, etc. keys as standard
-function keys" is on.
+function keys" is on. The four keys are the defaults: `PAIR_KEY_TALK`,
+`PAIR_KEY_INTERRUPT`, `PAIR_KEY_AGENT` and `PAIR_KEY_QUIT` rebind them
+(see Configuration); the status bar and the hints then name your keys.
 
 Global hotkeys: `brew install --cask hammerspoon`, then add
 `dofile(os.getenv("HOME") .. "/.pair/hammerspoon.lua")` to
@@ -357,6 +368,11 @@ names below. `pair init --lang pt --voice Luciana` writes `~/.pair/config`
 for you; the language reaches the agent in the instructions of the next
 session.
 
+The keys are settings like any other: `PAIR_KEY_TALK=F9 pair init` saves
+the talk key in `~/.pair/config`, and from then on the status bar, the
+hints and the doctor say `F9`. A value that is not a tmux key name is
+ignored in favour of the default.
+
 A repository is something you clone, so its file is not trusted with
 everything. `<repo>/.pair/config` can set how the session sounds and looks:
 `PAIR_LANG`, `PAIR_VOICE`, `PAIR_RATE`, `PAIR_KOKORO_VOICE`,
@@ -396,6 +412,8 @@ is read from the environment and from `~/.pair/config` only.
 | `PAIR_KOKORO_VOICE` | by language | Kokoro voice, for example `af_heart`, `am_michael`, `pf_dora` |
 | `PAIR_KOKORO_SPEED` | `1.0` | Kokoro pace; `1.1` is a little faster |
 | `PAIR_MUTE` | | log without speaking or listening (tests, demos) |
+| `PAIR_KEY_TALK` / `PAIR_KEY_INTERRUPT` / `PAIR_KEY_AGENT` / `PAIR_KEY_QUIT` | `F5` / `F6` / `F7` / `F8` | the session's keys, as tmux names them (`F9`, `C-t`, `M-Space`); environment and `~/.pair/config` only |
+| `PAIR_GREETING` | `on` | `off` skips the one sentence pair speaks at the first session on a machine |
 | `PAIR_CLAUDE_ARGS` | | extra arguments for the agent's command, for example `--model opus` |
 | `PAIR_DEBUG` | | print hook errors to stderr |
 
@@ -461,6 +479,13 @@ guessing.
   hello` in the same terminal; if the voice is missing, pick another with
   `pair init --voice <name>`.
 - **`F5` does nothing**: on a Mac laptop press `fn`+`F5`, or use `C-b t`.
+  On some keyboards `F5` is also the Dictation shortcut (System Settings →
+  Keyboard → Dictation), which takes the key before tmux sees it: turn
+  that shortcut off, or pick another key with `PAIR_KEY_TALK`. `pair
+  doctor` prints a "keys" line with this note on a laptop.
+- **The mic opened by `F6` closed on its own**: it closes after 5 s of
+  silence, with "nothing heard", so an interrupt pressed by mistake does
+  not leave a microphone open. Press `F5` to talk; that one waits for you.
 - **I need to see what Claude Code itself shows**: press `F7`. Its pane is
   hidden by default and the session works without it, but it is where
   permission prompts and Claude's typed answers appear.

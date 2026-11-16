@@ -272,9 +272,9 @@ func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *eve
 		{"set-option", "-p", "-t", editor, "@pair_name", "files: what " + who + " reads and changes"},
 		{"set-option", "-p", "-t", presencePane, "@pair_name", strings.ToLower(who)},
 		{"set-option", "-p", "-t", logPane, "@pair_name", "activity: what " + who + " does and why"},
-		{"set-option", "-p", "-t", agentPane, "@pair_name", strings.ToLower(ag.Title()) + ": type here · F7 hides this pane"},
+		{"set-option", "-p", "-t", agentPane, "@pair_name", strings.ToLower(ag.Title()) + ": type here · " + cfg.Keys.Agent + " hides this pane"},
 	}
-	steps = append(steps, sessionChrome(exe, who)...)
+	steps = append(steps, sessionChrome(exe, who, cfg.Keys)...)
 	for _, args := range steps {
 		if _, err := tmuxRun(args...); err != nil {
 			return fail(err)
@@ -302,6 +302,7 @@ func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *eve
 			return err
 		}
 	}
+	greet(cfg, exe)
 	if cfg.ClaudeShown {
 		return tmux.ShowAgent(s, cfg.ClaudeHeight)
 	}
@@ -312,10 +313,20 @@ func createSession(cfg config.Config, ag agent.Agent, pluginDir string, log *eve
 	return nil
 }
 
+// greet has the first-session sentence spoken, the first time pair runs on
+// this machine, by a process of the tmux server's: the start goes on to
+// attach meanwhile, and the sentence comes once the screen is up.
+func greet(cfg config.Config, exe string) {
+	if !hook.WantsGreeting(cfg) {
+		return
+	}
+	_, _ = tmuxRun("run-shell", "-b", "-d", "2", shellQuote(exe)+" hook greet --root "+shellQuote(cfg.Root)+" >/dev/null 2>&1")
+}
+
 // sessionChrome returns the options and key bindings of pair's tmux server:
 // mouse, labelled panes, a status line with the current state and the keys.
 // They are global to the server, which is pair's own.
-func sessionChrome(exe, who string) [][]string {
+func sessionChrome(exe, who string, keys config.Keys) [][]string {
 	// The bindings belong to the server, which may hold the sessions of
 	// several repositories: each command is told which session the key was
 	// pressed in. tmux expands #{session_name} when the key is pressed.
@@ -337,25 +348,26 @@ func sessionChrome(exe, who string) [][]string {
 		{"set-option", "-g", "status-left-length", "90"},
 		{"set-option", "-g", "status-left", " pair #{@pair_state} "},
 		{"set-option", "-g", "status-right-length", "90"},
-		// Buttons: clicking one runs `pair hook click <name>`.
-		{"set-option", "-g", "status-right", "#[range=user|talk]#{?#{==:#{@pair_mic},on},#[fg=white#,bg=red#,bold] ■ stop F5 ,#[fg=black#,bg=white] 🎙 talk F5 }#[default]#[norange] " +
-			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt F6 #[default]#[norange] " +
-			"#[range=user|agent]#[fg=black,bg=white] ⌨ " + strings.ToLower(who) + " F7 #[default]#[norange] " +
-			"#[range=user|quit]#[fg=black,bg=white] ⏻ quit F8 #[default]#[norange] "},
+		// Buttons: clicking one runs `pair hook click <name>`. Each is
+		// labelled with its key, the configured one.
+		{"set-option", "-g", "status-right", "#[range=user|talk]#{?#{==:#{@pair_mic},on},#[fg=white#,bg=red#,bold] ■ stop " + keys.Talk + " ,#[fg=black#,bg=white] 🎙 talk " + keys.Talk + " }#[default]#[norange] " +
+			"#[range=user|stop]#[fg=black,bg=white] ✋ interrupt " + keys.Interrupt + " #[default]#[norange] " +
+			"#[range=user|agent]#[fg=black,bg=white] ⌨ " + strings.ToLower(who) + " " + keys.Agent + " #[default]#[norange] " +
+			"#[range=user|quit]#[fg=black,bg=white] ⏻ quit " + keys.Quit + " #[default]#[norange] "},
 		{"bind-key", "-n", "MouseDown1Status", "run-shell", "-b", in + " hook click '#{mouse_status_range}' >/dev/null 2>&1"},
 		{"set-option", "-g", "window-status-current-format", ""},
 		{"set-option", "-g", "window-status-format", ""},
 		// Voice keys work from any pane, with and without the prefix.
-		{"bind-key", "-n", "F5", "run-shell", "-b", listen},
-		{"bind-key", "-n", "F6", "run-shell", "-b", interrupt},
+		{"bind-key", "-n", keys.Talk, "run-shell", "-b", listen},
+		{"bind-key", "-n", keys.Interrupt, "run-shell", "-b", interrupt},
 		{"bind-key", "t", "run-shell", "-b", listen},
 		{"bind-key", "i", "run-shell", "-b", interrupt},
-		// F7 shows the agent's pane under the editor and hides it again.
-		{"bind-key", "-n", "F7", "run-shell", "-b", toggle},
+		// The agent key shows its pane under the editor and hides it again.
+		{"bind-key", "-n", keys.Agent, "run-shell", "-b", toggle},
 		{"bind-key", "c", "run-shell", "-b", toggle},
-		// F8 ends the session: the agent, the panes, the voice. Pressed
-		// twice, so a stray key does not end it.
-		{"bind-key", "-n", "F8", "run-shell", "-b", quit},
+		// The quit key ends the session: the agent, the panes, the voice.
+		// Pressed twice, so a stray key does not end it.
+		{"bind-key", "-n", keys.Quit, "run-shell", "-b", quit},
 		{"bind-key", "q", "run-shell", "-b", quit},
 	}
 }

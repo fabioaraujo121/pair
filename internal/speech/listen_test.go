@@ -435,3 +435,97 @@ func TestConcurrentListenersRecordOnce(t *testing.T) {
 		t.Fatalf("heard=%d refused=%d, want 1 and 9", heard, refused)
 	}
 }
+
+// fakeRecThen writes a `rec` stand-in that, like sox with its silence
+// effect, writes the file first (FAKE_REC_WAV; nothing at all when empty,
+// as sox does before the first sound) and then keeps recording for
+// FAKE_REC_SLEEP seconds, dying at SIGTERM.
+func fakeRecThen(t *testing.T, dir string) string {
+	t.Helper()
+	bin := filepath.Join(dir, "rec")
+	script := `#!/bin/sh
+out="${10}"
+if [ -n "$FAKE_REC_WAV" ]; then cp "$FAKE_REC_WAV" "$out"; fi
+exec sleep "${FAKE_REC_SLEEP:-0}"
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// A microphone that opened as a side effect must not wait for ever: with
+// LeadIn set, a recorder into which nothing has been said is stopped, and
+// the outcome is "nothing heard", not a cap and not an error. One that is
+// being spoken into is left alone.
+func TestLeadInClosesAQuietMicrophone(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FAKE_DIR", dir)
+	t.Setenv("FAKE_REC_SLEEP", "10")
+	r := &Recorder{Bin: fakeRecThen(t, dir), Max: 10 * time.Second, LeadIn: 300 * time.Millisecond}
+	out := filepath.Join(dir, "out.wav")
+
+	// Nothing written yet: sox has heard no sound above the threshold.
+	t.Setenv("FAKE_REC_WAV", "")
+	start := time.Now()
+	rec, err := r.Record(context.Background(), out)
+	if err != nil {
+		t.Fatalf("a quiet microphone is not an error: %v", err)
+	}
+	if !rec.Quiet || rec.Capped || rec.Exists || time.Since(start) > 3*time.Second {
+		t.Fatalf("quiet: %+v after %s", rec, time.Since(start))
+	}
+
+	// Samples below the silence level are silence too.
+	silence := filepath.Join(dir, "silence.wav")
+	_ = WriteWAV(silence, 16000, sine(16000, 0.5, 0.002))
+	t.Setenv("FAKE_REC_WAV", silence)
+	if rec, err = r.Record(context.Background(), out); err != nil || !rec.Quiet || rec.Capped {
+		t.Fatalf("silence: %+v %v", rec, err)
+	}
+
+	// Someone is talking: the recorder runs on until it ends by itself.
+	speech := filepath.Join(dir, "speech.wav")
+	_ = WriteWAV(speech, 16000, sine(16000, 1.2, 0.3))
+	t.Setenv("FAKE_REC_WAV", speech)
+	t.Setenv("FAKE_REC_SLEEP", "1")
+	start = time.Now()
+	if rec, err = r.Record(context.Background(), out); err != nil || rec.Quiet || rec.Capped || !rec.Exists {
+		t.Fatalf("speech: %+v %v", rec, err)
+	}
+	if time.Since(start) < 900*time.Millisecond {
+		t.Fatalf("the recorder was stopped while someone spoke, after %s", time.Since(start))
+	}
+
+	// Without LeadIn the wait is as long as it takes, up to the cap.
+	t.Setenv("FAKE_REC_WAV", "")
+	t.Setenv("FAKE_REC_SLEEP", "10")
+	r.LeadIn, r.Max = 0, 600*time.Millisecond
+	if rec, err = r.Record(context.Background(), out); err != nil || rec.Quiet || !rec.Capped {
+		t.Fatalf("no lead-in: %+v %v", rec, err)
+	}
+
+	// Through the listener, the outcome has a name and sends nothing.
+	l := &VoiceListener{
+		Rec:     &Recorder{Bin: fakeRecThen(t, dir), Max: 10 * time.Second, LeadIn: 200 * time.Millisecond},
+		STT:     &Whisper{Bin: "/nonexistent"},
+		WavPath: out,
+	}
+	h, err := l.Listen(context.Background())
+	if err != nil || h.Text != "" || h.Dropped != "nothing heard" {
+		t.Fatalf("listener: %+v %v", h, err)
+	}
+}
+
+func TestAmplitudeReadsSoxThresholds(t *testing.T) {
+	for in, want := range map[string]float64{"1%": 0.01, "0.5%": 0.005, "0.02": 0.02, "-40d": 0.01, "junk": 0} {
+		if got := amplitude(in); math.Abs(got-want) > 1e-9 {
+			t.Errorf("amplitude(%q) = %g, want %g", in, got, want)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "p.wav")
+	_ = WriteWAV(path, 16000, sine(16000, 0.1, 0.3))
+	if a, err := AnalyzeWAV(path); err != nil || math.Abs(a.Peak-0.3) > 0.001 {
+		t.Fatalf("peak: %+v %v", a, err)
+	}
+}

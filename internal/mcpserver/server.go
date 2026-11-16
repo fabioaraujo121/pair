@@ -68,6 +68,9 @@ type Server struct {
 	// push-to-talk. AskWait is how long the question waits.
 	AskManual bool
 	AskWait   time.Duration
+	// TalkKey is the key that opens the microphone, for the messages that
+	// tell the engineer how to answer.
+	TalkKey string
 
 	speech     sync.Mutex // serializes speaking and listening: never both at once
 	lastSpeech time.Time
@@ -97,6 +100,7 @@ func New(cfg config.Config, version string) (*Server, error) {
 
 		AskManual: cfg.AskMic != "auto" && !cfg.Mute,
 		AskWait:   time.Duration(cfg.AskWait) * time.Second,
+		TalkKey:   cfg.Keys.Talk,
 		State:     func(state, detail string) { status.Set(cfg, state, detail) },
 		MicClosed: func(state, detail string) { status.ListeningDone(cfg, state, detail) },
 	}
@@ -279,8 +283,8 @@ func (s *Server) ask(ctx context.Context, _ *mcp.CallToolRequest, in AskInput) (
 		// The microphone stays closed until the engineer opens it.
 		_ = speech.SetPendingAsk(s.Cfg.StateDir, in.Question)
 		defer speech.ClearPendingAsk(s.Cfg.StateDir)
-		s.setState(tmux.StateAsking, "press F5 or click talk to answer")
-		_ = s.Log.Session("   the microphone is closed: press F5 or click 🎙 talk to answer")
+		s.setState(tmux.StateAsking, "press "+s.talkKey()+" or click talk to answer")
+		_ = s.Log.Session("   the microphone is closed: press " + s.talkKey() + " or click 🎙 talk to answer")
 		var ok bool
 		heard, ok, lerr = speech.WaitForAnswer(ctx, s.Cfg.StateDir, s.AskWait)
 		if lerr == nil && !ok {
@@ -367,6 +371,15 @@ func (s *Server) speakLocked(ctx context.Context, raw, kind string) (map[string]
 		return rec, err
 	}
 	return rec, nil
+}
+
+// talkKey is the configured key that opens the microphone; F5 for a
+// server built without one.
+func (s *Server) talkKey() string {
+	if s.TalkKey == "" {
+		return config.DefaultKeyTalk
+	}
+	return s.TalkKey
 }
 
 func checkLength(what, s string) error {

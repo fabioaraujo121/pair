@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/fabioaraujo121/pair/internal/config"
 	"github.com/fabioaraujo121/pair/internal/plain"
 	"github.com/fabioaraujo121/pair/internal/replay"
 )
@@ -39,6 +40,9 @@ type Entry struct {
 type Builder struct {
 	Root  string // repository root, to show relative paths
 	Agent string // the agent's name as a speaker; "claude" until the session says otherwise
+	// AgentKey is the key that shows the agent's pane, for the hint on a
+	// permission prompt; F7 when unset.
+	AgentKey string
 
 	lastHeard     string
 	lastHeardAt   time.Time
@@ -147,7 +151,7 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		if str(p, "kind") == "idle_prompt" || p["idle"] == true {
 			return nil, false
 		}
-		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " needs you", Text: str(p, "message") + " (the " + b.who() + " pane below; F7 for full screen)"})
+		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " needs you", Text: str(p, "message") + " (the " + b.who() + " pane below; " + b.agentKey() + " for full screen)"})
 	case "stop":
 		return one(Entry{Dim: true, Card: b.turnEnds(at)})
 	}
@@ -197,6 +201,14 @@ func (b *Builder) speaker() string {
 }
 
 // who is the agent's name in a sentence.
+// agentKey is the configured key that shows the agent's pane.
+func (b *Builder) agentKey() string {
+	if b.AgentKey == "" {
+		return config.DefaultKeyAgent
+	}
+	return b.AgentKey
+}
+
 func (b *Builder) who() string {
 	name := b.speaker()
 	return strings.ToUpper(name[:1]) + name[1:]

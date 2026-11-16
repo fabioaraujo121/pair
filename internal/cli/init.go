@@ -49,6 +49,16 @@ func Init(args []string) error {
 			return fmt.Errorf("%s needs a value", k)
 		}
 	}
+	// The keys have no flags: one set in the environment when init runs
+	// is kept, so `PAIR_KEY_TALK=F9 pair init` is enough.
+	for _, k := range []string{"PAIR_KEY_TALK", "PAIR_KEY_INTERRUPT", "PAIR_KEY_AGENT", "PAIR_KEY_QUIT"} {
+		if v := os.Getenv(k); v != "" {
+			if !config.ValidKey(v) {
+				return fmt.Errorf("%s=%q is not a key name tmux knows (F9, C-t, M-Space)", k, v)
+			}
+			settings[k] = v
+		}
+	}
 	if len(settings) > 0 {
 		if err := config.SaveUser(settings); err != nil {
 			return err
@@ -92,8 +102,8 @@ with Hammerspoon: add to ~/.hammerspoon/init.lua
 
   dofile(os.getenv("HOME") .. "/.pair/hammerspoon.lua")
 
-Next: run `+"`pair`"+` in a repository to start a session. In the session: F5 to talk, F6 to interrupt.
-`, pluginDir)
+Next: run `+"`pair`"+` in a repository to start a session. In the session: %s to talk, %s to interrupt.
+`, pluginDir, cfg.Keys.Talk, cfg.Keys.Interrupt)
 	return nil
 }
 

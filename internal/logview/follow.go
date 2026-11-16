@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/fabioaraujo121/pair/internal/config"
 	"io"
 	"os"
 	"os/signal"
@@ -32,7 +33,7 @@ func Follow(ctx context.Context, path, root string, out *os.File) error {
 		return 80
 	}
 	printer := &Printer{W: out, Width: width(), Color: color}
-	builder := &Builder{Root: root}
+	builder := &Builder{Root: root, AgentKey: config.Load(root).Keys.Agent}
 	var events []replay.Event
 	var offset int64
 	var partial []byte
@@ -43,7 +44,7 @@ func Follow(ctx context.Context, path, root string, out *os.File) error {
 		}
 		printer.Reset()
 		printer.Width = width()
-		builder = &Builder{Root: root}
+		builder = &Builder{Root: root, AgentKey: config.Load(root).Keys.Agent}
 		for _, e := range events {
 			if entries, ok := builder.Add(e); ok {
 				for _, en := range entries {
@@ -135,7 +136,7 @@ func Render(path, root string, out io.Writer, width int, color bool) error {
 		return err
 	}
 	printer := &Printer{W: out, Width: width, Color: color}
-	builder := &Builder{Root: root}
+	builder := &Builder{Root: root, AgentKey: config.Load(root).Keys.Agent}
 	for _, e := range events {
 		if entries, ok := builder.Add(e); ok {
 			for _, en := range entries {

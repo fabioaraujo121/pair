@@ -153,7 +153,7 @@ func finishSetup(w io.Writer, cfg config.Config, failed bool) error {
 	if failed {
 		return fmt.Errorf("not ready yet: fix what is marked ✗ above and run `pair setup` again")
 	}
-	line := "ready: cd into a repository and run pair. Press F5 to talk (fn F5 on a laptop)."
+	line := fmt.Sprintf("ready: cd into a repository and run pair. Press %s to talk (fn %s on a laptop).", cfg.Keys.Talk, cfg.Keys.Talk)
 	if cfg.TTS != "kokoro" {
 		line += " For a more natural voice: pair voice setup kokoro"
 	}

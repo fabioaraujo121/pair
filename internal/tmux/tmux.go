@@ -117,21 +117,25 @@ const (
 )
 
 // RenderState returns the styled status text for a state. who is the
-// agent's name in the sentence.
-func RenderState(state, detail, who string) string {
+// agent's name in the sentence; talk is the name of the key that opens
+// the microphone, F5 unless configured otherwise.
+func RenderState(state, detail, who, talk string) string {
 	if who == "" {
 		who = "Claude"
+	}
+	if talk == "" {
+		talk = "F5"
 	}
 	style, text := "fg=black,bg=yellow", "● "+who+" is working"
 	switch state {
 	case StateIdle:
-		style, text = "fg=black,bg=green", "○ your turn: F5 to talk"
+		style, text = "fg=black,bg=green", "○ your turn: "+talk+" to talk"
 	case StateSpeaking:
 		style, text = "fg=black,bg=cyan", "🗣 "+who+" is speaking"
 	case StateAsking:
 		style, text = "fg=white,bg=magenta", "❓ "+who+" is asking you"
 	case StateListening:
-		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause or press F5"
+		style, text = "fg=white,bg=red", "🎙 listening: speak, then pause or press "+talk
 	case StateAttention:
 		style, text = "fg=white,bg=red", "⚠ "+who+" needs you"
 	}
@@ -164,8 +168,9 @@ func StateColour(state string) string {
 // SetState updates the session's status indicator and tints every pane
 // border with the colour of the state, so the state is visible from
 // anywhere on the screen. It is a no-op without a session name, so code
-// running outside a pair session never touches tmux.
-func SetState(session, state, detail, who string) {
+// running outside a pair session never touches tmux. talk names the key
+// that opens the microphone.
+func SetState(session, state, detail, who, talk string) {
 	if session == "" {
 		return
 	}
@@ -176,7 +181,7 @@ func SetState(session, state, detail, who string) {
 		mic = "on"
 	}
 	_, _ = Run(
-		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail, who), ";",
+		"set-option", "-t", "="+session+":", "@pair_state", RenderState(state, detail, who, talk), ";",
 		"set-option", "-t", "="+session+":", "@pair_mic", mic, ";",
 		"set-option", "-w", "-t", window, "pane-border-style", "fg="+colour, ";",
 		"set-option", "-w", "-t", window, "pane-active-border-style", "fg="+colour+",bold",
