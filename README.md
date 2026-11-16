@@ -94,9 +94,14 @@ those to Claude Code per session):
 Then, once per machine:
 
 ```sh
-pair doctor --fix   # checks every dependency and downloads the whisper model (1.6 GB)
-pair doctor --mic   # records one second so macOS asks for microphone access
+pair setup   # checks every dependency, downloads the whisper model (about 550 MB),
+             # asks for microphone access, speaks, and says back what you say
 ```
+
+`pair setup` is safe to run again. The whisper model is large-v3-turbo
+quantized; the full 1.6 GB file of the same model is a setting:
+`PAIR_WHISPER_MODEL=~/.pair/models/ggml-large-v3-turbo.bin` in
+`~/.pair/config` (or the environment), then `pair setup` downloads it.
 
 ## A more natural voice
 
@@ -152,8 +157,9 @@ Nothing is written into the repository. The agent gets pair's hooks, the
 MCP server and the pairing instructions when `pair` starts it, for that
 process only: a Claude Code or Codex you open without pair, in the same
 repository, is exactly as it would be anywhere else. What pair keeps for a
-session lives in `.pair/`, which ignores itself in git. `pair init` only
-saves your settings and installs the Neovim plugin under `~/.pair`. The
+session lives in `.pair/`, which ignores itself in git. `pair setup` and
+`pair init` only save your settings and install the Neovim plugin under
+`~/.pair`. The
 first `pair` in a repository shows Claude Code's trust dialog; accept it
 (its default is "No, exit").
 
@@ -273,10 +279,11 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair sessions` | list the sessions of this repository |
 | `pair resume <id or name>` | open a past session again, with Claude's conversation |
 | `pair rename [<id or name>] <new name>` | name a session |
+| `pair setup` | once per machine: settings, dependencies, the whisper model, microphone access, a voice test and a read-back of what you say; safe to run again |
 | `pair init [--agent claude\|codex] [--lang en] [--voice Samantha] [--rate 190]` | save your agent and voice settings, install the Neovim plugin; nothing goes into the repository |
 | `pair uninstall` | remove what earlier versions wrote into the repository |
 | `pair voice [setup kokoro \| use \| list \| test]` | which voice speaks; install and choose a natural one |
-| `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration |
+| `pair doctor [--fix] [--mic]` | check dependencies, voice, socket path, model, mic, MCP registration; the checks `pair setup` runs, for scripts and troubleshooting |
 | `pair agent` | show or hide the agent's pane (what `F7` runs); `pair claude` still works |
 | `pair stop` | kill the session and any running `say`/`rec` |
 | `pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]` | play a session back: narrations spoken, jumps replayed |
@@ -368,7 +375,7 @@ is read from the environment and from `~/.pair/config` only.
 | `PAIR_RATE` | `190` | speech rate in words per minute |
 | `PAIR_CUE` | `on` | attention sound before speech; `off` disables it |
 | `PAIR_CUE_IDLE` | `6` | seconds of quiet after which a narration is announced |
-| `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo.bin` | whisper.cpp model |
+| `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo-q5_0.bin` | whisper.cpp model (about 550 MB). `~/.pair/models/ggml-large-v3-turbo.bin` is the full 1.6 GB file of the same model, also pinned; a full file already downloaded is used by default |
 | `PAIR_ASK_MIC` | `manual` | `manual`: you open the mic to answer a question; `auto`: it opens by itself after the question |
 | `PAIR_ASK_WAIT` | `180` | seconds a question waits for you to open the mic |
 | `PAIR_ASK_MAX` | `60` | longest single recording, in seconds |

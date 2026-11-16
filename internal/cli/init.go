@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	pair "github.com/fabioaraujo121/pair"
 	"github.com/fabioaraujo121/pair/internal/agent"
 	"github.com/fabioaraujo121/pair/internal/config"
 )
@@ -66,12 +65,9 @@ func Init(args []string) error {
 	}
 	fmt.Printf("• pairing with %s (change with `pair init --agent %s`)\n", ag.Title(), otherAgent(ag.Name()))
 	fmt.Printf("• speaking %s with voice %s at %d wpm (change with `pair init --lang pt --voice Luciana`)\n", cfg.Lang, cfg.Voice, cfg.Rate)
-	exe, err := os.Executable()
+	exe, err := pairBinary()
 	if err != nil {
 		return err
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
 	}
 	if left := ag.Leftovers(cfg.Root); len(left) > 0 {
 		fmt.Printf("! an earlier version of pair wrote into this repository: %s\n  run `pair uninstall` once to take it out\n", strings.Join(left, ", "))
@@ -79,17 +75,11 @@ func Init(args []string) error {
 		fmt.Println("• nothing is written into the repository: the agent gets pair's hooks and instructions at `pair`, for that session only")
 	}
 
-	pluginDir, err := InstallPlugin(cfg.UserDir)
+	pluginDir, hsPath, err := installUserFiles(cfg.UserDir, exe)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("✓ pair.nvim installed in %s (pair start loads it automatically)\n", pluginDir)
-
-	hsPath := filepath.Join(cfg.UserDir, "hammerspoon.lua")
-	hs := strings.ReplaceAll(pair.HammerspoonTemplate, "{{PAIR_BIN}}", exe)
-	if err := os.WriteFile(hsPath, []byte(hs), 0o644); err != nil {
-		return err
-	}
 	fmt.Printf("✓ Hammerspoon hotkeys written to %s (optional)\n", hsPath)
 
 	fmt.Printf(`

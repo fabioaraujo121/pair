@@ -240,8 +240,7 @@ footer a { color: var(--ink-2); }
   <pre id="install-cmd" tabindex="0" aria-label="install commands"><code><span class="p">$ </span>brew tap fabioaraujo121/tap
 <span class="p">$ </span>brew trust fabioaraujo121/tap   <span class="c"># Homebrew asks this once of any third-party tap</span>
 <span class="p">$ </span>brew install --cask pair
-<span class="p">$ </span>pair doctor --fix      <span class="c"># downloads the whisper model (1.6 GB)</span>
-<span class="p">$ </span>pair doctor --mic      <span class="c"># one second of recording so macOS asks for microphone access</span></code></pre>
+<span class="p">$ </span>pair setup             <span class="c"># dependencies, the whisper model (about 550 MB), microphone access, a voice test</span></code></pre>
 </div>
     <ul class="chips" aria-label="Works with">
       <li class="chip">macOS 14+</li><li class="chip">tmux</li><li class="chip">Neovim</li><li class="chip">Claude Code</li><li class="chip">Codex</li>
@@ -352,7 +351,7 @@ README.md</div>
       <p class="eyebrow">What runs where</p>
       <h2 id="local-h">Runs on your Mac</h2>
       <ul class="facts">
-        <li><span><strong>Listening</strong> is whisper.cpp, <strong>speaking</strong> is macOS <code>say</code> or Kokoro, <strong>recording</strong> is sox. All on your Mac; the whisper model is 1.6 GB and Apple Silicon is recommended.</span></li>
+        <li><span><strong>Listening</strong> is whisper.cpp, <strong>speaking</strong> is macOS <code>say</code> or Kokoro, <strong>recording</strong> is sox. All on your Mac; the whisper model is about 550 MB and Apple Silicon is recommended.</span></li>
         <li><span><strong>The microphone</strong> opens only when you press F5, and closes when you pause or press it again.</span></li>
         <li><span><strong>The agent's own conversation</strong> still goes to its provider, Claude Code to Anthropic and Codex to OpenAI, as it does without pair. pair sends nothing anywhere. Turn Wi-Fi off and press F5: the transcript still arrives; only the agent's reply waits for the network.</span></li>
         <li><span><strong>Downloads</strong> are pinned and SHA-256 verified.</span></li>
@@ -406,8 +405,7 @@ README.md</div>
   <pre id="install-cmd-2" tabindex="0" aria-label="install commands"><code><span class="p">$ </span>brew tap fabioaraujo121/tap
 <span class="p">$ </span>brew trust fabioaraujo121/tap   <span class="c"># Homebrew asks this once of any third-party tap</span>
 <span class="p">$ </span>brew install --cask pair
-<span class="p">$ </span>pair doctor --fix      <span class="c"># downloads the whisper model (1.6 GB)</span>
-<span class="p">$ </span>pair doctor --mic      <span class="c"># one second of recording so macOS asks for microphone access</span></code></pre>
+<span class="p">$ </span>pair setup             <span class="c"># dependencies, the whisper model (about 550 MB), microphone access, a voice test</span></code></pre>
 </div>
       <p class="plain">Then, in a repository:</p>
       <div class="install">

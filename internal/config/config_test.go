@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/fabioaraujo121/pair/internal/fetch"
 )
 
 func TestDefaultSockIsShortAndStable(t *testing.T) {
@@ -241,5 +243,49 @@ func TestTheAgentIsChosenByTheEngineerOnly(t *testing.T) {
 	t.Setenv("PAIR_AGENT", "claude")
 	if c := Load(repo); c.Agent != "claude" {
 		t.Fatalf("environment: %q", c.Agent)
+	}
+}
+
+func TestTheWhisperModelDefaultsToTheSmallFileUnlessOneIsThere(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PAIR_WHISPER_MODEL", "")
+	repo := t.TempDir()
+	models := filepath.Join(home, ".pair", "models")
+
+	if _, err := fetch.Find(fetch.Whisper, DefaultWhisperModel); err != nil {
+		t.Fatalf("the default model must be pinned: %v", err)
+	}
+	if fetch.Whisper[0].Name != DefaultWhisperModel {
+		t.Fatalf("the default must be the first pin, got %s", fetch.Whisper[0].Name)
+	}
+	// Nothing downloaded yet: the small file, to be downloaded.
+	if got := Load(repo).WhisperModel; got != filepath.Join(models, "ggml-large-v3-turbo-q5_0.bin") {
+		t.Fatalf("default: %s", got)
+	}
+	// The full file from before the default changed is kept in use.
+	_ = os.MkdirAll(models, 0o755)
+	full := filepath.Join(models, "ggml-large-v3-turbo.bin")
+	_ = os.WriteFile(full, []byte("x"), 0o644)
+	if got := Load(repo).WhisperModel; got != full {
+		t.Fatalf("an existing full model must be reused: %s", got)
+	}
+	// Both there: the default.
+	small := filepath.Join(models, DefaultWhisperModel)
+	_ = os.WriteFile(small, []byte("x"), 0o644)
+	if got := Load(repo).WhisperModel; got != small {
+		t.Fatalf("with both files the default wins: %s", got)
+	}
+	// The engineer's choice wins over any file: the environment, then the
+	// user file. A repository has no say (TestARepositoryCannotRedirectPair).
+	if err := SaveUser(map[string]string{"PAIR_WHISPER_MODEL": full}); err != nil {
+		t.Fatal(err)
+	}
+	if got := Load(repo).WhisperModel; got != full {
+		t.Fatalf("user config: %s", got)
+	}
+	t.Setenv("PAIR_WHISPER_MODEL", "/opt/models/ggml-small.bin")
+	if got := Load(repo).WhisperModel; got != "/opt/models/ggml-small.bin" {
+		t.Fatalf("environment must win: %s", got)
 	}
 }

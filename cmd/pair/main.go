@@ -43,6 +43,8 @@ Usage:
   pair resume <id or name>   open a past session again, with the agent's conversation
   pair rename [<id or name>] <new name>
   pair agent         show or hide the agent's pane (hidden by default; F7 in the session)
+  pair setup         once per machine: settings, dependencies, the whisper model, microphone access,
+                     a voice test and a read-back of what you say
   pair init [--agent claude|codex] [--lang en] [--voice Samantha] [--rate 190]
                      save your settings and install the Neovim plugin; nothing goes into the repository
   pair uninstall     remove what earlier versions of pair wrote into this repository
@@ -96,6 +98,8 @@ func main() {
 		err = cli.Rename(args, os.Stdout)
 	case "init":
 		err = cli.Init(args)
+	case "setup":
+		err = cli.Setup(os.Stdout)
 	case "uninstall":
 		err = cli.Uninstall(os.Stdout)
 	case "doctor":

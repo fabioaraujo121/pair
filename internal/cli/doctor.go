@@ -37,34 +37,8 @@ type check struct {
 // returns an error when a required check fails.
 func Doctor(w io.Writer, opts DoctorOptions) error {
 	cfg := config.Load("")
-	var checks []check
-
-	bin := func(name string, required bool, purpose string) bool {
-		path, err := exec.LookPath(name)
-		if err != nil {
-			checks = append(checks, check{name, required, false, "not found on PATH (" + purpose + ")"})
-			return false
-		}
-		checks = append(checks, check{name, required, true, path})
-		return true
-	}
 	ag, _ := agent.For(cfg.Agent)
-	bin(ag.Binary(), true, "the agent, "+ag.Title())
-	bin("tmux", true, "layout")
-	bin("git", true, "diffs")
-	bin("say", true, "text to speech")
-	bin("afplay", false, "chimes")
-	hasRec := bin("rec", true, "microphone, brew install sox")
-	hasWhisper := bin("whisper-cli", true, "speech to text, brew install whisper.cpp")
-	bin("delta", false, "pretty diffs")
-
-	if v, err := nvimVersion(); err != nil {
-		checks = append(checks, check{"nvim", true, false, "not found on PATH"})
-	} else {
-		major, minor := parseVersion(v)
-		ok := major > 0 || minor >= 10
-		checks = append(checks, check{"nvim", true, ok, v + " (need 0.10+)"})
-	}
+	checks, hasRec, hasWhisper := toolChecks(ag)
 
 	if config.SockTooLong(cfg.Sock) {
 		checks = append(checks, check{"socket path", true, false, fmt.Sprintf("%d bytes, max %d: %s", len(cfg.Sock), config.MaxSockPath, cfg.Sock)})
@@ -96,7 +70,7 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 
 	checks = append(checks, modelCheck(w, cfg, opts, hasWhisper))
 
-	if hasRec && (opts.MicTest || (stdinIsTerminal() && os.Getenv("PAIR_SKIP_MIC") == "")) {
+	if hasRec && (opts.MicTest || skipMic() == "") {
 		checks = append(checks, micCheck(w, cfg))
 	} else if hasRec {
 		checks = append(checks, check{"microphone", false, true, "not tested (run `pair doctor --mic` once to grant access)"})
@@ -127,22 +101,136 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 
 	failed := false
 	for _, c := range checks {
-		mark := "✓"
-		if !c.ok {
-			mark = "✗"
-			if !c.required {
-				mark = "!"
-			} else {
-				failed = true
-			}
+		if printCheck(w, c) {
+			failed = true
 		}
-		fmt.Fprintf(w, "%s %-14s %s\n", mark, c.name, c.detail)
 	}
 	fmt.Fprintf(w, "\nrepo root: %s\n", cfg.Root)
 	if failed {
 		return fmt.Errorf("required checks failed")
 	}
 	return nil
+}
+
+// printCheck writes one check with the doctor's marks: ✓ passed, ✗ a
+// required check failed, ! something to know. It reports a failure.
+func printCheck(w io.Writer, c check) (failed bool) {
+	mark := "✓"
+	if !c.ok {
+		mark = "!"
+		if c.required {
+			mark, failed = "✗", true
+		}
+	}
+	fmt.Fprintf(w, "%s %-14s %s\n", mark, c.name, c.detail)
+	return failed
+}
+
+// A tool pair runs, and the Homebrew formula that provides it, for the
+// line that says what to install.
+type tool struct {
+	name     string
+	required bool
+	purpose  string
+	formula  string // "" when Homebrew is not where it comes from
+}
+
+var tools = []tool{
+	{"tmux", true, "layout", "tmux"},
+	{"git", true, "diffs", "git"},
+	{"say", true, "text to speech", ""},
+	{"afplay", false, "chimes", ""},
+	{"rec", true, "microphone", "sox"},
+	{"whisper-cli", true, "speech to text", "whisper.cpp"},
+	{"delta", false, "pretty diffs", "git-delta"},
+}
+
+// toolChecks looks for the agent and the tools on PATH, and for a Neovim
+// recent enough. It reports whether the microphone and whisper tools were
+// found, since the checks that use them make no sense without them.
+func toolChecks(ag agent.Agent) (checks []check, hasRec, hasWhisper bool) {
+	bin := func(name string, required bool, purpose, formula string) bool {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			detail := "not found on PATH (" + purpose + ")"
+			if formula != "" {
+				detail += ": brew install " + formula
+			}
+			checks = append(checks, check{name, required, false, detail})
+			return false
+		}
+		checks = append(checks, check{name, required, true, path})
+		return true
+	}
+	bin(ag.Binary(), true, "the agent, "+ag.Title(), "")
+	for _, t := range tools {
+		found := bin(t.name, t.required, t.purpose, t.formula)
+		switch t.name {
+		case "rec":
+			hasRec = found
+		case "whisper-cli":
+			hasWhisper = found
+		}
+	}
+	if v, err := nvimVersion(); err != nil {
+		checks = append(checks, check{"nvim", true, false, "not found on PATH: brew install neovim"})
+	} else {
+		major, minor := parseVersion(v)
+		ok := major > 0 || minor >= 10
+		checks = append(checks, check{"nvim", true, ok, v + " (need 0.10+)"})
+	}
+	return checks, hasRec, hasWhisper
+}
+
+// brewLine is the one command that installs the missing tools among the
+// failed checks, or "" when Homebrew provides none of them.
+func brewLine(checks []check) string {
+	var formulas []string
+	for _, c := range checks {
+		if c.ok {
+			continue
+		}
+		if c.name == "nvim" {
+			formulas = append(formulas, "neovim")
+			continue
+		}
+		for _, t := range tools {
+			if t.name == c.name && t.formula != "" {
+				formulas = append(formulas, t.formula)
+			}
+		}
+	}
+	if len(formulas) == 0 {
+		return ""
+	}
+	return "brew install " + strings.Join(formulas, " ")
+}
+
+// skipMic says why the microphone must not be opened by a check that was
+// not asked for explicitly: a run without a terminal (a script, a hook)
+// cannot answer macOS's permission dialog. It returns "" when the
+// microphone may be tested.
+func skipMic() string {
+	if os.Getenv("PAIR_SKIP_MIC") != "" {
+		return "PAIR_SKIP_MIC is set"
+	}
+	if !atTerminal() {
+		return "stdin is not a terminal"
+	}
+	return ""
+}
+
+// atTerminal is stdinIsTerminal, replaceable by a test that has no terminal
+// and wants the interactive steps run against fake tools.
+var atTerminal = stdinIsTerminal
+
+// approxSize writes a download size the way the docs do: "550 MB", "1.6 GB".
+func approxSize(n int64) string {
+	if n >= 1e9 {
+		return fmt.Sprintf("%.1f GB", float64(n)/1e9)
+	}
+	mb := (n/1e6 + 25) / 50 * 50 // to the nearest 50 MB
+	return fmt.Sprintf("%d MB", mb)
 }
 
 // modelCheck reports the whisper model and downloads it with --fix. Only
@@ -152,7 +240,7 @@ func modelCheck(w io.Writer, cfg config.Config, opts DoctorOptions, hasWhisper b
 	name := filepath.Base(cfg.WhisperModel)
 	pin, pinErr := fetch.Find(fetch.Whisper, name)
 	if fi, err := os.Stat(cfg.WhisperModel); err == nil {
-		detail := fmt.Sprintf("%s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)
+		detail := fmt.Sprintf("%s (%s)", cfg.WhisperModel, approxSize(fi.Size()))
 		if pinErr == nil && !pin.SizeMatches(cfg.WhisperModel) {
 			return check{"whisper model", hasWhisper, false, detail + fmt.Sprintf(": not the size of the pinned %s (%d bytes); remove it and run `pair doctor --fix`", name, pin.Size)}
 		}
@@ -162,14 +250,14 @@ func modelCheck(w io.Writer, cfg config.Config, opts DoctorOptions, hasWhisper b
 		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 pair has no pinned download for %s: put the file there yourself, or use the default model", cfg.WhisperModel, name)}
 	}
 	if !opts.DownloadModel {
-		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 run `pair doctor --fix` to download it (about 1.6 GB) from %s", cfg.WhisperModel, pin.URL)}
+		return check{"whisper model", hasWhisper, false, fmt.Sprintf("missing: %s\n                 run `pair doctor --fix` to download it (about %s) from %s", cfg.WhisperModel, approxSize(pin.Size), pin.URL)}
 	}
-	fmt.Fprintf(w, "downloading %s\n  to %s\n  (sha256 %s…)\n", pin.URL, cfg.WhisperModel, pin.SHA256[:12])
+	fmt.Fprintf(w, "downloading %s (about %s)\n  to %s\n  (sha256 %s…)\n", pin.URL, approxSize(pin.Size), cfg.WhisperModel, pin.SHA256[:12])
 	if err := pin.Download(w, cfg.WhisperModel); err != nil {
 		return check{"whisper model", true, false, "download failed: " + err.Error()}
 	}
 	fi, _ := os.Stat(cfg.WhisperModel)
-	return check{"whisper model", true, true, fmt.Sprintf("downloaded and verified %s (%.1f GB)", cfg.WhisperModel, float64(fi.Size())/1e9)}
+	return check{"whisper model", true, true, fmt.Sprintf("downloaded and verified %s (%s)", cfg.WhisperModel, approxSize(fi.Size()))}
 }
 
 // micCheck records one second through `rec` with a hard cap. The first

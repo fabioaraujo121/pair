@@ -6,8 +6,17 @@ package fetch
 // and write the new values here with the date.
 
 // Whisper models, from ggerganov/whisper.cpp on Hugging Face at a fixed
-// commit. The hash is the one Hugging Face publishes for the file.
+// commit. The hash is the one Hugging Face publishes for the file. The
+// quantized large-v3-turbo is the default: a third of the size of the full
+// file, the same accuracy class, and whisper-cli loads it as it is. The full
+// file stays pinned for PAIR_WHISPER_MODEL.
 var Whisper = []Pin{
+	{
+		Name:   "ggml-large-v3-turbo-q5_0.bin",
+		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo-q5_0.bin",
+		Size:   574041195,
+		SHA256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2", // 2026-11-16
+	},
 	{
 		Name:   "ggml-large-v3-turbo.bin",
 		URL:    "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-large-v3-turbo.bin",
