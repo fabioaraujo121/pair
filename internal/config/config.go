@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/fabioaraujo121/pair/internal/agent"
+	"github.com/fabioaraujo121/pair/internal/fetch"
 )
 
 const (
@@ -30,6 +31,11 @@ const (
 	DefaultAskMax       = 60
 	DefaultSilenceSecs  = "1.5" // trailing silence that ends a recording
 	DefaultSilenceLevel = "1%"  // amplitude below which sox counts silence
+
+	// DefaultWhisperModel is the file name of the whisper model downloaded
+	// when PAIR_WHISPER_MODEL names none: large-v3-turbo quantized, about
+	// 550 MB. The full 1.6 GB file is pinned too (fetch.Whisper).
+	DefaultWhisperModel = "ggml-large-v3-turbo-q5_0.bin"
 
 	// MaxSockPath is the sun_path limit on macOS: nvim --listen and Go's
 	// net.Dial both refuse longer unix socket paths.
@@ -128,7 +134,7 @@ func Load(cwd string) Config {
 		Voice:        str("PAIR_VOICE", DefaultVoice),
 		Rate:         num("PAIR_RATE", DefaultRate),
 		Lang:         str("PAIR_LANG", DefaultLang),
-		WhisperModel: str("PAIR_WHISPER_MODEL", filepath.Join(userDir, "models", "ggml-large-v3-turbo.bin")),
+		WhisperModel: str("PAIR_WHISPER_MODEL", WhisperModelIn(filepath.Join(userDir, "models"))),
 		AskMax:       num("PAIR_ASK_MAX", DefaultAskMax),
 		SilenceSecs:  str("PAIR_SILENCE_SECS", DefaultSilenceSecs),
 		SilenceLevel: str("PAIR_SILENCE_LEVEL", DefaultSilenceLevel),
@@ -148,6 +154,24 @@ func Load(cwd string) Config {
 		STT:          str("PAIR_STT", "whisper"),
 		Mute:         str("PAIR_MUTE", "") != "",
 	}
+}
+
+// WhisperModelIn is the whisper model used when none is configured: a
+// pinned model already in dir, the default one first, so a machine that
+// downloaded the full file before the default changed keeps using it
+// without a second download; otherwise the default, to be downloaded.
+func WhisperModelIn(dir string) string {
+	for _, pin := range fetch.Whisper { // the default is the first pin
+		if path := filepath.Join(dir, pin.Name); fileExists(path) {
+			return path
+		}
+	}
+	return filepath.Join(dir, DefaultWhisperModel)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func float(s string, def float64) float64 {

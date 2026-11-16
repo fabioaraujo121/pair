@@ -58,8 +58,10 @@ func TestOnlyThePinnedFileIsKept(t *testing.T) {
 	if data, _ := os.ReadFile(dest); string(data) != "the model\n" {
 		t.Fatalf("downloaded: %q", data)
 	}
-	if _, err := Find(Whisper, "ggml-large-v3-turbo.bin"); err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"ggml-large-v3-turbo-q5_0.bin", "ggml-large-v3-turbo.bin"} {
+		if _, err := Find(Whisper, name); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := Find(Whisper, "ggml-tiny.bin"); err == nil {
 		t.Fatal("an unpinned model must not be downloadable")

@@ -85,7 +85,7 @@ go install github.com/fabioaraujo121/pair/cmd/pair@latest
 Then, once per machine:
 
 ```sh
-pair doctor --fix   # checks every dependency and downloads the whisper model (1.6 GB)
+pair doctor --fix   # checks every dependency and downloads the whisper model (about 550 MB)
 pair doctor --mic   # records one second so macOS asks for microphone access
 ```
 
@@ -357,7 +357,7 @@ is read from the environment and from `~/.pair/config` only.
 | `PAIR_RATE` | `190` | speech rate in words per minute |
 | `PAIR_CUE` | `on` | attention sound before speech; `off` disables it |
 | `PAIR_CUE_IDLE` | `6` | seconds of quiet after which a narration is announced |
-| `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo.bin` | whisper.cpp model |
+| `PAIR_WHISPER_MODEL` | `~/.pair/models/ggml-large-v3-turbo-q5_0.bin` | whisper.cpp model (about 550 MB). `~/.pair/models/ggml-large-v3-turbo.bin` is the full 1.6 GB file of the same model, also pinned; a full file already downloaded is used by default |
 | `PAIR_ASK_MIC` | `manual` | `manual`: you open the mic to answer a question; `auto`: it opens by itself after the question |
 | `PAIR_ASK_WAIT` | `180` | seconds a question waits for you to open the mic |
 | `PAIR_ASK_MAX` | `60` | longest single recording, in seconds |
