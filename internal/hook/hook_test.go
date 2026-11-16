@@ -420,3 +420,97 @@ func TestQuitTakesTwoPresses(t *testing.T) {
 		t.Fatal("after ending, the count starts over")
 	}
 }
+
+// The interrupt key has two stages. While the agent speaks, one press
+// skips the sentence and the agent goes on; a second press soon after, or
+// a press when nothing is being spoken, cancels the turn. A key held down
+// echoes many times a second: those presses do nothing.
+func TestInterruptHasTwoStages(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	at := func(d time.Duration, speaking bool) interruptDecision {
+		return decideInterrupt(dir, speaking, now.Add(d))
+	}
+	if got := at(0, false); got != interruptTurn {
+		t.Fatalf("nothing is being spoken: the press cancels the turn, got %d", got)
+	}
+	if got := at(time.Second, true); got != interruptSkip {
+		t.Fatalf("a first press while speaking skips the sentence, got %d", got)
+	}
+	if got := at(time.Second+30*time.Millisecond, true); got != interruptEcho {
+		t.Fatalf("the echo of a held key does nothing, got %d", got)
+	}
+	if got := at(time.Second+400*time.Millisecond, true); got != interruptEcho {
+		t.Fatalf("echoes keep coming while the key is down, got %d", got)
+	}
+	if got := at(2*time.Second+500*time.Millisecond, true); got != interruptTurn {
+		t.Fatalf("a second press within the window of the skip cancels the turn, got %d", got)
+	}
+	if got := at(3*time.Second, true); got != interruptSkip {
+		t.Fatalf("after a turn was cancelled the count starts over, got %d", got)
+	}
+	if got := at(10*time.Second, true); got != interruptSkip {
+		t.Fatalf("a press long after a skip is a skip again, got %d", got)
+	}
+	if got := at(11*time.Second, false); got != interruptTurn {
+		t.Fatalf("the window closed and nothing is spoken: cancel, got %d", got)
+	}
+	if got := at(11*time.Second+900*time.Millisecond, true); got != interruptSkip {
+		t.Fatalf("the marker of a cancelled turn is gone: a skip, got %d", got)
+	}
+}
+
+// The greeting is pair's own sentence, said once per machine: a marker
+// under ~/.pair remembers it. PAIR_GREETING=off and PAIR_MUTE keep it
+// quiet, and a muted session does not use up the one chance.
+func TestTheGreetingIsSpokenOnce(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PAIR_TTS", "silent")
+	cfg := config.Load(root)
+	marker := filepath.Join(cfg.UserDir, "greeted")
+	_ = os.Remove(marker)
+	if !WantsGreeting(cfg) {
+		t.Fatal("the first session ever wants the greeting")
+	}
+
+	var out bytes.Buffer
+	if err := Greet([]string{"--root", root}, &out); err != nil {
+		t.Fatal(err)
+	}
+	want := "Press F5, or fn F5 on a laptop, and tell me what to do."
+	if strings.TrimSpace(out.String()) != want {
+		t.Fatalf("spoken: %q", out.String())
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the marker is written after speaking")
+	}
+	logged, _ := os.ReadFile(filepath.Join(root, ".pair", "events.jsonl"))
+	if !strings.Contains(string(logged), `"type":"greeting"`) || strings.Contains(string(logged), `"narrate"`) {
+		t.Fatalf("the greeting is logged as pair's, not as the agent's narration:\n%s", logged)
+	}
+	if WantsGreeting(config.Load(root)) {
+		t.Fatal("once is enough")
+	}
+	out.Reset()
+	if err := Greet([]string{"--root", root}, &out); err != nil || out.Len() != 0 {
+		t.Fatalf("a second start says nothing: %q %v", out.String(), err)
+	}
+
+	_ = os.Remove(marker)
+	t.Setenv("PAIR_KEY_TALK", "F9")
+	if got := Greeting(config.Load(root).Keys.Talk); !strings.Contains(got, "Press F9, or fn F9") {
+		t.Fatalf("the configured key is the one named: %q", got)
+	}
+	t.Setenv("PAIR_GREETING", "off")
+	if WantsGreeting(config.Load(root)) {
+		t.Fatal("PAIR_GREETING=off keeps quiet")
+	}
+	t.Setenv("PAIR_GREETING", "")
+	t.Setenv("PAIR_MUTE", "1")
+	if err := Greet([]string{"--root", root}, &out); err != nil || out.Len() != 0 {
+		t.Fatalf("a muted session is silent: %q %v", out.String(), err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("a muted session must not use up the greeting")
+	}
+}

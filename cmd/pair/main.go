@@ -51,7 +51,8 @@ Usage:
   pair stop          kill the session and any running say/rec
   pair hook <name> [--agent <name>]   the agent's hooks: session, activity, pre_edit, post_edit, prompt, stop, notify
   pair hook listen   push-to-talk: record, transcribe, type into the agent's pane
-  pair hook interrupt  stop the agent (Escape), then listen
+  pair hook interrupt  skip the sentence being spoken; pressed again, or when nothing is
+                     being spoken, stop the agent (Escape), then listen
   pair hook point --file f --start n [--end m] [--note t]   point the agent at a range
   pair mcp [--root <repo>]   stdio MCP server with narrate, show, ask (run by the agent)
   pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]   play a session back
@@ -61,7 +62,7 @@ Usage:
 
 Environment: PAIR_AGENT, PAIR_SESSION, PAIR_SOCK, PAIR_HIGHLIGHT_TTL, PAIR_DIFF_LIMIT,
 PAIR_VOICE, PAIR_RATE, PAIR_LANG, PAIR_WHISPER_MODEL, PAIR_ASK_MAX, PAIR_TTS, PAIR_STT,
-PAIR_MUTE (see README.md).
+PAIR_MUTE, PAIR_KEY_TALK, PAIR_KEY_INTERRUPT, PAIR_KEY_AGENT, PAIR_KEY_QUIT (see README.md).
 `
 
 func main() {
@@ -123,6 +124,8 @@ func main() {
 			err = hook.Point(args[1:], os.Stdout)
 		case "click": // a click on a status bar button
 			err = hook.Click(args[1:], os.Stdout)
+		case "greet": // the first-session sentence, run by `pair` once
+			err = hook.Greet(args[1:], os.Stdout)
 		default:
 			runAgentHook(args[0], args[1:])
 			return

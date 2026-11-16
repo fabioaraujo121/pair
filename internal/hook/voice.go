@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -39,7 +40,7 @@ func Listen(args []string, out io.Writer) error {
 		return nil
 	}
 	defer lock.Release()
-	return listenAndInject(cfg, out, true)
+	return listenAndInject(cfg, out, true, 0) // an explicit press: the microphone waits
 }
 
 // Click handles a click on one of the status bar buttons.
@@ -132,9 +133,12 @@ func ToggleAgent(args []string, out io.Writer) error {
 	return nil
 }
 
-// Interrupt stops the agent mid-turn and hands the microphone to the
-// engineer: kill `say`, press the agent's interrupt key, wait for the
-// prompt, then Listen.
+// Interrupt is the interrupt key, in two stages. While the agent speaks,
+// one press only skips the sentence: the agent goes on working. A second
+// press within interruptWindow, or a press when nothing is being spoken,
+// stops the agent mid-turn and hands the microphone to the engineer: kill
+// the speech, press the agent's interrupt key, wait for the prompt, then
+// listen. That microphone closes by itself when nothing is said into it.
 func Interrupt(args []string, out io.Writer) error {
 	cfg := voiceConfig(args)
 	// The lock comes first: a key that auto-repeats must not send the
@@ -145,8 +149,20 @@ func Interrupt(args []string, out io.Writer) error {
 		return nil
 	}
 	defer lock.Release()
-	speech.KillSpeech(cfg.RunDir)
 	log := events.Open(cfg.StateDir)
+	switch decideInterrupt(cfg.RunDir, speech.Speaking(cfg.RunDir), time.Now()) {
+	case interruptEcho:
+		return nil
+	case interruptSkip:
+		speech.KillSpeech(cfg.RunDir) // the speaker's own process puts the state back to working
+		_ = log.Append("skip", nil)
+		if tmux.HasSession(cfg.Session) {
+			tmux.Message(cfg.Session, "🔇 skipped · "+cfg.Keys.Interrupt+" again to interrupt the turn")
+		}
+		fmt.Fprintln(out, "skipped")
+		return nil
+	}
+	speech.KillSpeech(cfg.RunDir)
 	if tmux.HasSession(cfg.Session) {
 		ag, _ := agent.For(cfg.Agent)
 		if err := tmux.SendKeys(cfg.Session, ag.InterruptKeys()...); err != nil {
@@ -157,7 +173,56 @@ func Interrupt(args []string, out io.Writer) error {
 	_ = log.Append("interrupt", nil)
 	_ = log.Session("✋ interrupted")
 	speech.ClearPendingAsk(cfg.StateDir) // the question was cancelled with the turn
-	return listenAndInject(cfg, out, false)
+	return listenAndInject(cfg, out, false, interruptLeadIn)
+}
+
+// interruptDecision is what a press of the interrupt key asks for.
+type interruptDecision int
+
+const (
+	interruptEcho interruptDecision = iota // the key is held down: nothing
+	interruptSkip                          // silence the sentence; the agent goes on
+	interruptTurn                          // cancel the agent's turn, then listen
+)
+
+const (
+	skipMarker      = "interrupt.press"
+	interruptWindow = 2 * time.Second        // a second press this soon after a skip cancels the turn
+	interruptRepeat = 500 * time.Millisecond // presses closer than this are one key held down
+	interruptLeadIn = 5 * time.Second        // a microphone opened by the interrupt key closes after this much silence
+)
+
+// decideInterrupt records a press of the interrupt key and says what it
+// asks for. The two presses that cancel a turn come from two processes,
+// so the first is remembered in a file: its name's time is the last
+// press, the key's echoes included, and its content the press that
+// skipped the sentence.
+func decideInterrupt(dir string, speaking bool, now time.Time) interruptDecision {
+	marker := filepath.Join(dir, skipMarker)
+	if fi, err := os.Stat(marker); err == nil && now.After(fi.ModTime()) {
+		first := fi.ModTime()
+		if data, err := os.ReadFile(marker); err == nil {
+			if t, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(data))); err == nil {
+				first = t
+			}
+		}
+		switch {
+		case now.Sub(fi.ModTime()) < interruptRepeat:
+			_ = os.Chtimes(marker, now, now)
+			return interruptEcho
+		case now.Sub(first) < interruptWindow:
+			_ = os.Remove(marker)
+			return interruptTurn
+		}
+	}
+	if !speaking {
+		_ = os.Remove(marker)
+		return interruptTurn
+	}
+	_ = os.MkdirAll(dir, 0o700)
+	_ = os.WriteFile(marker, []byte(now.Format(time.RFC3339Nano)+"\n"), 0o600)
+	_ = os.Chtimes(marker, now, now)
+	return interruptSkip
 }
 
 // micLock takes the cross-process microphone lock without waiting. A press
@@ -176,13 +241,17 @@ func micLock(cfg config.Config, out io.Writer) (*speech.MicLock, bool) {
 
 // listenAndInject records once and routes the transcript: to the question
 // the agent is waiting on when there is one (answerAsk), otherwise into the
-// agent's input as a new prompt.
-func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
+// agent's input as a new prompt. With leadIn, a microphone nobody speaks
+// into closes after that long; zero waits for the first word.
+func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool, leadIn time.Duration) error {
 	speech.KillSpeech(cfg.RunDir)
 	log := events.Open(cfg.StateDir)
 	listener, err := speech.NewListener(cfg, false) // the caller holds the lock
 	if err != nil {
 		return err
+	}
+	if vl, ok := listener.(*speech.VoiceListener); ok { // a muted session has no microphone to close
+		vl.Rec.LeadIn = leadIn
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.AskMax+30)*time.Second)
 	defer cancel()
@@ -199,7 +268,7 @@ func listenAndInject(cfg config.Config, out io.Writer, answerAsk bool) error {
 		// was open, or else where things stand.
 		switch {
 		case asked && heard.Text == "":
-			status.ListeningDone(cfg, tmux.StateAsking, "press F5 or click talk to answer")
+			status.ListeningDone(cfg, tmux.StateAsking, "press "+cfg.Keys.Talk+" or click talk to answer")
 		case asked:
 			status.ListeningDone(cfg, tmux.StateWorking, "")
 		case before.State != tmux.StateIdle && before.State != tmux.StateListening:
@@ -265,6 +334,59 @@ func sent(cfg config.Config) {
 	if !cfg.Mute && cfg.Cue {
 		chime("Pop")
 	}
+}
+
+// greetedMarker, under ~/.pair, says the greeting has been spoken on this
+// machine.
+const greetedMarker = "greeted"
+
+// WantsGreeting reports whether the first-session sentence is still to be
+// spoken: never before on this machine, not turned off, not muted.
+func WantsGreeting(cfg config.Config) bool {
+	if !cfg.Greeting || cfg.Mute {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(cfg.UserDir, greetedMarker))
+	return err != nil
+}
+
+// Greeting is the one sentence pair says for itself, at the first session
+// ever: which key to press. The agent's canned phrases were taken out for
+// sounding like a machine; this is not the agent, and it is said once.
+func Greeting(talk string) string {
+	return "Press " + talk + ", or fn " + talk + " on a laptop, and tell me what to do."
+}
+
+// Greet speaks the greeting, once per machine, from a process of its own
+// so the start it belongs to goes on meanwhile. It holds no microphone
+// lock and leaves the status alone: it is not the agent speaking. The
+// marker is written after the sentence, so a start that dies before it
+// tries again next time; a sentence cut short by the talk key counts as
+// heard.
+func Greet(args []string, out io.Writer) error {
+	cfg := voiceConfig(args)
+	if !WantsGreeting(cfg) {
+		return nil
+	}
+	speaker, err := speech.NewSpeaker(cfg)
+	if err != nil {
+		return err
+	}
+	text := Greeting(cfg.Keys.Talk)
+	log := events.Open(cfg.StateDir)
+	_ = log.Append("greeting", map[string]any{"text": text})
+	_ = log.Session("pair: press " + cfg.Keys.Talk + " to talk")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := speaker.Speak(ctx, text); err != nil && !errors.Is(err, speech.ErrInterrupted) {
+		return err
+	}
+	_ = os.MkdirAll(cfg.UserDir, 0o755)
+	if err := os.WriteFile(filepath.Join(cfg.UserDir, greetedMarker), []byte(time.Now().Format(time.RFC3339)+"\n"), 0o600); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, text)
+	return nil
 }
 
 // repeatWindow is how long an identical transcript counts as a repeat.

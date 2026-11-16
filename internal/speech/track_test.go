@@ -86,11 +86,23 @@ func TestTheTrackedProcessIsStopped(t *testing.T) {
 	if pid, began, ok := readTracked(files[0]); !ok || began == "" || processBegan(pid) != began {
 		t.Fatalf("the file must say when the process began: %d %q %v", pid, began, ok)
 	}
+	if !Speaking(dir) {
+		t.Fatal("a tracked speech process that is alive is speech in progress")
+	}
 	KillSpeech(dir)
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		_ = cmd.Process.Kill()
 		t.Fatal("the tracked process was not stopped")
+	}
+	if Speaking(dir) {
+		t.Fatal("nothing speaks once the process is gone")
+	}
+	// A file left behind names a process that is not the one tracked.
+	bystander := sleeper(t)
+	_ = os.WriteFile(filepath.Join(dir, "speech-9.pid"), []byte(strconv.Itoa(bystander.Process.Pid)+"\nMon Jan  1 00:00:00 2001\n"), 0o600)
+	if Speaking(dir) {
+		t.Fatal("a stale file is not speech")
 	}
 }

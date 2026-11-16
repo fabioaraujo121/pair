@@ -37,7 +37,8 @@ type Status struct {
 	Mic    bool   `json:"mic,omitempty"`    // the microphone is open
 	Behind *Shown `json:"behind,omitempty"` // reported while it was open, shown when it closes
 
-	Agent string `json:"agent,omitempty"` // the agent's name in a sentence: "Claude", "Codex"
+	Agent   string `json:"agent,omitempty"`    // the agent's name in a sentence: "Claude", "Codex"
+	TalkKey string `json:"talk_key,omitempty"` // the key that opens the microphone, for the labels
 }
 
 const file = "status.json"
@@ -129,7 +130,7 @@ func write(cfg config.Config, state, detail string, newTurn bool) {
 			save(cfg.StateDir, prev)
 			return // the display stays on listening
 		}
-		st := Status{State: state, Detail: detail, Since: now, Turn: prev.Turn, Mic: state == tmux.StateListening, Agent: who}
+		st := Status{State: state, Detail: detail, Since: now, Turn: prev.Turn, Mic: state == tmux.StateListening, Agent: who, TalkKey: cfg.Keys.Talk}
 		if prev.State == state && !prev.Since.IsZero() {
 			st.Since = prev.Since
 		}
@@ -143,7 +144,7 @@ func write(cfg config.Config, state, detail string, newTurn bool) {
 		}
 		save(cfg.StateDir, st)
 	}
-	tmux.SetState(cfg.Session, state, detail, who)
+	tmux.SetState(cfg.Session, state, detail, who, cfg.Keys.Talk)
 }
 
 // Label is the plain sentence for a state. who is the agent's name.

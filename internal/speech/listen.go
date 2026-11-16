@@ -5,12 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -52,6 +54,13 @@ type Recorder struct {
 	SilenceLevel string        // "1%"
 	SilenceSecs  string        // "1.5"
 	Max          time.Duration // hard cap, enforced with SIGTERM so the WAV stays valid
+
+	// LeadIn, when set, closes a microphone into which nothing has been
+	// said this long after it opened. sox trims leading silence, so `rec`
+	// on its own waits for the first sound for ever; that is right for a
+	// key the engineer pressed to talk, not for a microphone that opened
+	// as a side effect. Zero keeps the wait.
+	LeadIn time.Duration
 }
 
 // Recording describes what Record produced.
@@ -60,6 +69,7 @@ type Recording struct {
 	Audio  Audio
 	Capped bool
 	Exists bool
+	Quiet  bool // closed by LeadIn: nothing above the silence level was heard
 }
 
 // Record writes a mono 16 kHz WAV to path, stopping at the first pause of
@@ -99,21 +109,69 @@ func (r *Recorder) Record(ctx context.Context, path string) (Recording, error) {
 	cmd.Stderr = &stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 2 * time.Second
+	var quiet atomic.Bool
+	done := make(chan struct{})
+	if r.LeadIn > 0 {
+		go watchLeadIn(path, r.LeadIn, amplitude(level), done, &quiet, cancel)
+	}
 	runErr := runTracked(cmd, r.RunDir, trackRecord)
+	close(done)
 
 	if ctx.Err() != nil {
 		return Recording{Path: path}, ErrInterrupted
 	}
-	rec := Recording{Path: path, Capped: rctx.Err() != nil}
+	rec := Recording{Path: path, Quiet: quiet.Load()}
+	rec.Capped = rctx.Err() != nil && !rec.Quiet
 	_ = os.Chmod(path, 0o600) // the engineer's voice
 	audio, err := AnalyzeWAV(path)
 	if err == nil {
 		rec.Exists, rec.Audio = true, audio
 	}
-	if runErr != nil && !rec.Capped && !rec.Exists {
+	if runErr != nil && !rec.Capped && !rec.Quiet && !rec.Exists {
 		return rec, fmt.Errorf("%s: %v: %s", bin, runErr, strings.TrimSpace(stderr.String()))
 	}
 	return rec, nil
+}
+
+// watchLeadIn looks at the WAV being written once leadIn has passed and
+// stops the recorder, through stop, when nothing above level has reached
+// it. Until the first sound sox writes no samples at all (not even a
+// header), so a file with sound in it is a file that was spoken into. done
+// is closed when the recorder has ended on its own.
+func watchLeadIn(path string, leadIn time.Duration, level float64, done <-chan struct{}, quiet *atomic.Bool, stop func()) {
+	select {
+	case <-done:
+		return
+	case <-time.After(leadIn):
+	}
+	if a, err := AnalyzeWAV(path); err == nil && a.Seconds > 0 && a.Peak >= level {
+		return // someone is talking
+	}
+	select {
+	case <-done: // it ended by itself in the meantime
+	default:
+		quiet.Store(true)
+		stop()
+	}
+}
+
+// amplitude reads a sox threshold ("1%", "-40d", "0.01") as a fraction of
+// full scale. An unreadable one is 0: any sample then counts as sound.
+func amplitude(level string) float64 {
+	s := strings.TrimSpace(level)
+	switch {
+	case strings.HasSuffix(s, "%"):
+		v, _ := strconv.ParseFloat(strings.TrimSuffix(s, "%"), 64)
+		return v / 100
+	case strings.HasSuffix(s, "d"):
+		v, err := strconv.ParseFloat(strings.TrimSuffix(s, "d"), 64)
+		if err != nil {
+			return 0
+		}
+		return math.Pow(10, v/20)
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
 }
 
 // Whisper transcribes WAV files with whisper.cpp's whisper-cli.
@@ -266,6 +324,9 @@ func (l *VoiceListener) Listen(ctx context.Context) (Heard, error) {
 	}
 	h := Heard{Seconds: rec.Audio.Seconds, RMS: rec.Audio.RMS, Capped: rec.Capped}
 	switch {
+	case rec.Quiet:
+		h.Dropped = "nothing heard"
+		return h, nil
 	case !rec.Exists:
 		h.Dropped = "no audio file (microphone unavailable or permission denied)"
 		return h, nil

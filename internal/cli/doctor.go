@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -125,6 +126,8 @@ func Doctor(w io.Writer, opts DoctorOptions) error {
 		checks = append(checks, check{"auto-background", false, false, "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS is set in your shell; pair start overrides it to 0 for the session"})
 	}
 
+	checks = append(checks, check{"keys", false, true, keysDetail(cfg.Keys, laptop())})
+
 	failed := false
 	for _, c := range checks {
 		mark := "✓"
@@ -228,6 +231,29 @@ func micCheck(w io.Writer, cfg config.Config) check {
 		return check{"microphone", false, false, detail + fmt.Sprintf(": above the %s silence threshold, recordings would never stop. Lower the noise or set PAIR_SILENCE_LEVEL=%.0f%%", cfg.SilenceLevel, level*2)}
 	}
 	return check{"microphone", true, true, detail}
+}
+
+// keysDetail names the keys, and on a laptop says what gets in the way of
+// the talk key: the most common reason a first session hears nothing. The
+// Dictation setting is not read; the note is enough.
+func keysDetail(keys config.Keys, laptop bool) string {
+	detail := fmt.Sprintf("talk %s, interrupt %s, agent pane %s, quit %s", keys.Talk, keys.Interrupt, keys.Agent, keys.Quit)
+	if !laptop || !functionKey.MatchString(keys.Talk) {
+		return detail
+	}
+	talk := keys.Talk
+	return detail + fmt.Sprintf(".\n                 %s is fn+%s unless 'Use F1, F2, etc. keys as standard function keys' is on (System Settings → Keyboard → Keyboard Shortcuts → Function Keys);"+
+		"\n                 on some keyboards %s is also the Dictation shortcut (System Settings → Keyboard → Dictation); change it with PAIR_KEY_TALK", talk, talk, talk)
+}
+
+// functionKey is a key that sits on the fn row: F1 to F19.
+var functionKey = regexp.MustCompile(`^F[0-9]{1,2}$`)
+
+// laptop reports whether this Mac has a built-in battery, which is what
+// tells a laptop from a desktop whatever the model is called.
+func laptop() bool {
+	out, err := exec.Command("pmset", "-g", "batt").Output()
+	return err == nil && strings.Contains(string(out), "InternalBattery")
 }
 
 // tailLines returns the last n non-empty lines of s joined with " | ".

@@ -31,10 +31,38 @@ const (
 	DefaultSilenceSecs  = "1.5" // trailing silence that ends a recording
 	DefaultSilenceLevel = "1%"  // amplitude below which sox counts silence
 
+	// The keys of the status bar buttons, as tmux names them.
+	DefaultKeyTalk      = "F5"
+	DefaultKeyInterrupt = "F6"
+	DefaultKeyAgent     = "F7"
+	DefaultKeyQuit      = "F8"
+
 	// MaxSockPath is the sun_path limit on macOS: nvim --listen and Go's
 	// net.Dial both refuse longer unix socket paths.
 	MaxSockPath = 104
 )
+
+// Keys are the keys bound in the session, by what they do. Each is a tmux
+// key name: it goes into a `bind-key` and into the status bar's labels.
+type Keys struct {
+	Talk      string // PAIR_KEY_TALK: open the microphone
+	Interrupt string // PAIR_KEY_INTERRUPT: skip the sentence; twice, cancel the turn and listen
+	Agent     string // PAIR_KEY_AGENT: show or hide the agent's pane
+	Quit      string // PAIR_KEY_QUIT: end the session, pressed twice
+}
+
+// DefaultKeys are F5 to F8.
+func DefaultKeys() Keys {
+	return Keys{Talk: DefaultKeyTalk, Interrupt: DefaultKeyInterrupt, Agent: DefaultKeyAgent, Quit: DefaultKeyQuit}
+}
+
+// validKey is the shape of a tmux key name pair accepts: "F9", "C-t",
+// "M-Space", "S-F5". Anything else would reach a tmux command line and a
+// status bar format, so it is replaced by the default.
+var validKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_+-]{0,15}$`)
+
+// ValidKey reports whether name can be bound and shown as a key.
+func ValidKey(name string) bool { return validKey.MatchString(name) }
 
 // Config is the fully resolved configuration for one invocation.
 type Config struct {
@@ -70,6 +98,8 @@ type Config struct {
 	TTS          string  // PAIR_TTS: text-to-speech adapter (say, kokoro)
 	STT          string  // PAIR_STT: speech-to-text adapter (whisper)
 	Mute         bool    // PAIR_MUTE: log narrations without speaking or listening
+	Keys         Keys    // PAIR_KEY_TALK, PAIR_KEY_INTERRUPT, PAIR_KEY_AGENT, PAIR_KEY_QUIT
+	Greeting     bool    // PAIR_GREETING=off skips the one sentence spoken at the first session ever
 }
 
 // Load resolves the configuration for a process running in cwd. An empty cwd
@@ -115,7 +145,20 @@ func Load(cwd string) Config {
 	if !agent.Known(agentName) {
 		agentName = agent.Default
 	}
+	key := func(name, def string) string {
+		if v := str(name, ""); ValidKey(v) {
+			return v
+		}
+		return def
+	}
 	return Config{
+		Keys: Keys{
+			Talk:      key("PAIR_KEY_TALK", DefaultKeyTalk),
+			Interrupt: key("PAIR_KEY_INTERRUPT", DefaultKeyInterrupt),
+			Agent:     key("PAIR_KEY_AGENT", DefaultKeyAgent),
+			Quit:      key("PAIR_KEY_QUIT", DefaultKeyQuit),
+		},
+		Greeting:     str("PAIR_GREETING", "on") != "off",
 		Agent:        agentName,
 		Root:         root,
 		StateDir:     stateDir,

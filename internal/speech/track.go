@@ -80,6 +80,20 @@ func readTracked(file string) (pid int, began string, ok bool) {
 // KillSpeech silences the session whose run directory is dir.
 func KillSpeech(dir string) { signalTracked(dir, trackSpeech) }
 
+// Speaking reports whether the session whose run directory is dir is
+// making sound right now: a tracked speech process that is still the one
+// that was tracked. A neural voice that is synthesizing, not yet playing,
+// does not count; nothing could be silenced yet.
+func Speaking(dir string) bool {
+	files, _ := filepath.Glob(filepath.Join(dir, trackSpeech+"-*.pid"))
+	for _, f := range files {
+		if pid, began, ok := readTracked(f); ok && began != "" && processBegan(pid) == began {
+			return true
+		}
+	}
+	return false
+}
+
 // KillRecording stops the recording of the session whose run directory is
 // dir.
 func KillRecording(dir string) { signalTracked(dir, trackRecord) }

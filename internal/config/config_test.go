@@ -243,3 +243,40 @@ func TestTheAgentIsChosenByTheEngineerOnly(t *testing.T) {
 		t.Fatalf("environment: %q", c.Agent)
 	}
 }
+
+// The keys come from the environment and ~/.pair/config, as tmux key
+// names; anything else falls back to the default, and a repository cannot
+// rebind them.
+func TestKeysAreConfigurable(t *testing.T) {
+	repo := t.TempDir()
+	_ = os.Mkdir(filepath.Join(repo, ".git"), 0o755)
+	if c := Load(repo); c.Keys != DefaultKeys() || !c.Greeting {
+		t.Fatalf("defaults: %+v", c.Keys)
+	}
+	t.Setenv("PAIR_KEY_TALK", "F9")
+	t.Setenv("PAIR_KEY_INTERRUPT", "C-t")
+	t.Setenv("PAIR_KEY_AGENT", "M-Space")
+	t.Setenv("PAIR_KEY_QUIT", "F12; kill-server")
+	t.Setenv("PAIR_GREETING", "off")
+	c := Load(repo)
+	if c.Keys != (Keys{Talk: "F9", Interrupt: "C-t", Agent: "M-Space", Quit: DefaultKeyQuit}) {
+		t.Fatalf("keys: %+v", c.Keys)
+	}
+	if c.Greeting {
+		t.Fatal("PAIR_GREETING=off")
+	}
+	for _, k := range []string{"PAIR_KEY_TALK", "PAIR_KEY_INTERRUPT", "PAIR_KEY_AGENT", "PAIR_KEY_QUIT"} {
+		t.Setenv(k, "")
+	}
+	_ = os.MkdirAll(filepath.Join(repo, ".pair"), 0o755)
+	_ = os.WriteFile(filepath.Join(repo, ".pair", "config"), []byte("PAIR_KEY_TALK=F9\n"), 0o644)
+	if c := Load(repo); c.Keys.Talk != DefaultKeyTalk {
+		t.Fatalf("a repository rebound the talk key: %+v", c.Keys)
+	}
+	if err := SaveUser(map[string]string{"PAIR_KEY_TALK": "F10"}); err != nil {
+		t.Fatal(err)
+	}
+	if c := Load(repo); c.Keys.Talk != "F10" {
+		t.Fatalf("the user file sets the keys: %+v", c.Keys)
+	}
+}

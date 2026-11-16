@@ -92,3 +92,17 @@ func TestDetailIsOneLineOfText(t *testing.T) {
 		}
 	}
 }
+
+// The hint names the key that opens the microphone: the configured one,
+// F5 for a status written without one.
+func TestTheHintNamesTheTalkKey(t *testing.T) {
+	now := time.Date(2026, 11, 16, 12, 0, 0, 0, time.UTC)
+	lines := Frame(status.Status{State: tmux.StateIdle, TalkKey: "F9"}, 3, 60, now, false)
+	if !strings.Contains(strings.Join(lines, "\n"), "press F9 or click talk") {
+		t.Fatalf("configured key: %q", lines)
+	}
+	lines = Frame(status.Status{State: tmux.StateAsking}, 3, 60, now, false)
+	if !strings.Contains(strings.Join(lines, "\n"), "press F5 to answer") {
+		t.Fatalf("default key: %q", lines)
+	}
+}
