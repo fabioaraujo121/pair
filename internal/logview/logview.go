@@ -6,6 +6,7 @@ package logview
 import (
 	"fmt"
 	"io"
+	"math"
 	"path/filepath"
 	"strings"
 	"time"
@@ -43,6 +44,11 @@ type Builder struct {
 	lastHeardAt   time.Time
 	questionOpen  bool
 	questionAnswd bool
+
+	// A turn runs from the prompt (or the push-to-talk that sent it) to
+	// the stop; how much of it was speech is said at its end.
+	turnStart  time.Time
+	turnSpeech time.Duration
 }
 
 // Add converts one event. ok is false when the event shows nothing.
@@ -79,9 +85,11 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 			b.questionAnswd = true
 			return one(Entry{Speaker: You, Label: "you answer", Text: text})
 		}
+		b.turnBegins(at)
 		return one(Entry{Speaker: You, Text: text})
 
 	case "prompt":
+		b.turnBegins(at)
 		var out []Entry
 		text := str(p, "text")
 		spoken := text != "" && strings.HasPrefix(b.lastHeard, strings.TrimSuffix(text, "…")) && at.Sub(b.lastHeardAt) < 15*time.Second
@@ -103,6 +111,7 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		return one(Entry{Speaker: You, Card: "✋ interrupted"})
 
 	case "narrate":
+		b.turnSpeech += spoke(p)
 		return one(Entry{Speaker: b.speaker(), Text: str(p, "text")})
 	case "show":
 		return one(Entry{Speaker: b.speaker(), Card: "→ " + b.ref(p), Text: str(p, "note")})
@@ -118,6 +127,7 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " asks", Text: str(p, "text")})
 	case "ask": // the closing record of a question; the answer may be shown already
 		defer func() { b.questionOpen = false }()
+		b.turnSpeech += spoke(p)
 		ans, _ := p["answer"].(map[string]any)
 		var out []Entry
 		if !b.questionOpen { // logs written before questions were announced
@@ -139,9 +149,43 @@ func (b *Builder) Add(e replay.Event) (entries []Entry, ok bool) {
 		}
 		return one(Entry{Speaker: b.speaker(), Label: b.speaker() + " needs you", Text: str(p, "message") + " (the " + b.who() + " pane below; F7 for full screen)"})
 	case "stop":
-		return one(Entry{Dim: true, Card: "your turn"})
+		return one(Entry{Dim: true, Card: b.turnEnds(at)})
 	}
 	return nil, false
+}
+
+// turnBegins marks the start of a turn, unless one is running already: the
+// prompt event follows the push-to-talk that sent it.
+func (b *Builder) turnBegins(at time.Time) {
+	if b.turnStart.IsZero() {
+		b.turnStart = at
+	}
+}
+
+// speechShareAfter is how long a turn must last before its speech share is
+// worth a word; in a short turn the share says nothing.
+const speechShareAfter = 20 * time.Second
+
+// turnEnds closes the turn and returns the "your turn" card, with the share
+// of the turn that was speech when the turn lasted long enough. Speech is
+// half of a session's wall time; the share is how the engineer sees it.
+func (b *Builder) turnEnds(at time.Time) string {
+	card := "your turn"
+	if dur := at.Sub(b.turnStart); !b.turnStart.IsZero() && dur > speechShareAfter {
+		share := int(math.Round(100 * float64(b.turnSpeech) / float64(dur)))
+		if share > 100 {
+			share = 100
+		}
+		card += fmt.Sprintf(" · speech %d%%", share)
+	}
+	b.turnStart, b.turnSpeech = time.Time{}, 0
+	return card
+}
+
+// spoke is how long a narrate or ask event was speech: its ms. An ask also
+// records listen_ms, the engineer's time, which is not speech.
+func spoke(p map[string]any) time.Duration {
+	return time.Duration(num(p, "ms")) * time.Millisecond
 }
 
 // speaker is the agent's name as a speaker, lower case.
