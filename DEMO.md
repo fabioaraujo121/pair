@@ -117,8 +117,8 @@ beat 4 10 s. The cuts fall in the model's thinking time, the yellow wave.
 - Voice: `pair voice use kokoro am_michael` (or the voice chosen), then
   `pair voice test`. Not Samantha.
 - Microphone: a wired microphone, not AirPods, which switch to the
-  low-quality headset profile when used as input. `pair setup` when it has
-  landed, else `pair doctor --mic`: the project's name said and read back.
+  low-quality headset profile when used as input. `pair setup`: the
+  project's name said and read back.
 - `pair doctor`: everything green, the whisper model present, Claude Code
   signed in and the trust dialog for this directory accepted once before.
 - Claude Code's pane hidden: `PAIR_CLAUDE=hidden`, the default. No F7 in
