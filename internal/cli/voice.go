@@ -215,23 +215,39 @@ func voiceTest(text string, w io.Writer) error {
 			text = "Vou adicionar a validação no modelo, porque hoje ele aceita um endereço vazio. Depois rodo os testes."
 		}
 	}
-	speaker, err := speech.NewSpeaker(cfg)
+	speaker, engine, done, err := openSpeaker(cfg, w)
 	if err != nil {
 		return err
 	}
-	if k, ok := speaker.(*speech.Kokoro); ok {
-		k.Warn = func(msg string) { fmt.Fprintln(w, "!", msg) }
-		defer k.Close()
-		loadStart := time.Now()
-		k.Warm()
-		fmt.Fprintf(w, "Kokoro, voice %s (model ready in %s)\n", k.Voice, time.Since(loadStart).Round(10*time.Millisecond))
-	} else {
-		fmt.Fprintf(w, "system voice %s\n", cfg.Voice)
-	}
+	defer done()
+	fmt.Fprintln(w, engine)
 	start := time.Now()
 	err = speaker.Speak(context.Background(), speech.Normalize(text, speech.VocabularyFor(cfg.Lang)))
 	fmt.Fprintf(w, "spoken in %s\n", time.Since(start).Round(100*time.Millisecond))
 	return err
+}
+
+// openSpeaker returns the configured speaker ready for its first sentence
+// (Kokoro loads its model now, so the sentence is not delayed), a line
+// naming the engine for the engineer, and what to call when done with it.
+func openSpeaker(cfg config.Config, w io.Writer) (speaker speech.Speaker, engine string, done func(), err error) {
+	speaker, err = speech.NewSpeaker(cfg)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	done = func() {}
+	engine = "system voice " + cfg.Voice
+	if cfg.Mute {
+		engine = "muted: PAIR_MUTE is set, nothing is spoken"
+	}
+	if k, ok := speaker.(*speech.Kokoro); ok {
+		k.Warn = func(msg string) { fmt.Fprintln(w, "!", msg) }
+		done = k.Close
+		loadStart := time.Now()
+		k.Warm()
+		engine = fmt.Sprintf("Kokoro, voice %s (model ready in %s)", k.Voice, time.Since(loadStart).Round(10*time.Millisecond))
+	}
+	return speaker, engine, done, nil
 }
 
 func contains(list []string, s string) bool {

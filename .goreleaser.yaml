@@ -74,11 +74,11 @@ homebrew_casks:
       - formula: tmux
       - formula: neovim
     caveats: |
+      Once per machine: `pair setup` checks the dependencies, downloads the
+      whisper model (about 550 MB), asks for microphone access and tests the
+      voice. Then, in a repository: `pair`.
       Recommended: brew install git-delta (pretty diffs) and
       brew install --cask hammerspoon (global push-to-talk hotkeys).
-      whisper.cpp ships no model: run `pair doctor --fix` to download one,
-      then `pair doctor --mic` once to grant microphone access.
-      In a repository: `pair init`, then `pair`.
     hooks:
       post:
         # The binary is not notarized: strip the quarantine flag so Gatekeeper

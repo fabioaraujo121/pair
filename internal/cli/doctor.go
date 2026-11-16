@@ -214,11 +214,15 @@ func skipMic() string {
 	if os.Getenv("PAIR_SKIP_MIC") != "" {
 		return "PAIR_SKIP_MIC is set"
 	}
-	if !stdinIsTerminal() {
+	if !atTerminal() {
 		return "stdin is not a terminal"
 	}
 	return ""
 }
+
+// atTerminal is stdinIsTerminal, replaceable by a test that has no terminal
+// and wants the interactive steps run against fake tools.
+var atTerminal = stdinIsTerminal
 
 // approxSize writes a download size the way the docs do: "550 MB", "1.6 GB".
 func approxSize(n int64) string {
