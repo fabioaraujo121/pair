@@ -4,3 +4,6 @@
 # runtime state of a pairing session inside this repo
 /.pair/
 /PAIRING.md
+
+# worktrees of coding agents working on this repository
+.claude/worktrees/

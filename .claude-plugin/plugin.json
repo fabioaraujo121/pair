@@ -1,0 +1,21 @@
+{
+  "name": "pair",
+  "version": "0.2.0",
+  "description": "Voice-driven pairing with Claude Code in the terminal: it narrates before it edits, points at the line in Neovim, asks and waits for your answer. This plugin checks the install and tells you how to start a session.",
+  "author": {
+    "name": "Fábio Araújo",
+    "url": "https://fabioaraujo121.com/"
+  },
+  "homepage": "https://pairwithagent.com",
+  "repository": "https://github.com/fabioaraujo121/pair",
+  "license": "MIT",
+  "keywords": [
+    "voice",
+    "pairing",
+    "neovim",
+    "tmux",
+    "speech",
+    "whisper",
+    "macos"
+  ]
+}

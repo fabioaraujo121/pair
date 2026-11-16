@@ -1,0 +1,30 @@
+name: nvim
+on:
+  push:
+    branches: [main]
+    paths: ["nvim/**", ".github/workflows/nvim.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      # pair.nvim is the nvim/ directory with its own history, published as
+      # a plugin repository. `git subtree split` is deterministic, so every
+      # run produces the same commits and the push fast-forwards. The token
+      # is the release token, which needs access to fabioaraujo121/pair.nvim.
+      - name: Publish nvim/ to fabioaraujo121/pair.nvim
+        env:
+          TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN }}
+        run: |
+          set -eu
+          git config user.name "pair"
+          git config user.email "pair@users.noreply.github.com"
+          git subtree split --prefix=nvim -b pair-nvim
+          git push -q "https://x-access-token:${TOKEN}@github.com/fabioaraujo121/pair.nvim.git" pair-nvim:main

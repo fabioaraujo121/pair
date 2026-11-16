@@ -1,0 +1,22 @@
+{
+  "name": "pairwithagent",
+  "owner": {
+    "name": "Fábio Araújo",
+    "url": "https://fabioaraujo121.com/"
+  },
+  "description": "pair: voice-driven pairing with a coding agent in the terminal.",
+  "plugins": [
+    {
+      "name": "pair",
+      "source": "./",
+      "description": "Checks the pair install and tells you how to start a spoken pairing session with Neovim.",
+      "category": "productivity",
+      "tags": [
+        "voice",
+        "pairing",
+        "neovim"
+      ],
+      "version": "0.2.0"
+    }
+  ]
+}

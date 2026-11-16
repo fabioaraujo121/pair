@@ -82,6 +82,15 @@ brew install tmux neovim sox whisper.cpp git-delta   # git-delta is optional
 go install github.com/fabioaraujo121/pair/cmd/pair@latest
 ```
 
+As a Claude Code plugin, which adds `/pair:start`, a skill that checks the
+install and tells you how to begin (the binary still comes from Homebrew
+or Go; the plugin adds no hooks or tools of its own, since `pair` hands
+those to Claude Code per session):
+
+```
+/plugin install pair --marketplace fabioaraujo121/pair
+```
+
 Then, once per machine:
 
 ```sh
@@ -482,6 +491,17 @@ engines (Kokoro, whisper-cli) are slow and run only when asked:
 PAIR_REAL_AUDIO=1 go test ./internal/speech/
 ```
 
+## pair.nvim
+
+The Neovim plugin lives in `nvim/` and is embedded into the binary, which
+installs it under `~/.pair/nvim` at every start. The same directory is
+published, with its history, as
+[`fabioaraujo121/pair.nvim`](https://github.com/fabioaraujo121/pair.nvim)
+for people who want it in their own Neovim and for the plugin listings:
+`.github/workflows/nvim.yml` runs `git subtree split` on every push that
+touches `nvim/` and pushes the result (the release token needs access to
+that repository). `scripts/sync-nvim.sh` does the same from a laptop.
+
 ## Releasing
 
 A tag push runs `.github/workflows/release.yml`: the tests, then
@@ -492,6 +512,10 @@ and pushes the cask to
 [`fabioaraujo121/homebrew-tap`](https://github.com/fabioaraujo121/homebrew-tap).
 The releases have their own repository from the time the source was
 private; the cask and the site point there, so they stay.
+
+With the tag, bump `version` in `.claude-plugin/plugin.json` and
+`.claude-plugin/marketplace.json`, which is what the Claude Code plugin
+reports.
 
 One-time setup: a fine-grained personal access token with "Contents: read
 and write" on those two repositories only, saved in this repository as the
