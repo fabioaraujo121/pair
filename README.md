@@ -271,6 +271,7 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 | `pair agent` | show or hide the agent's pane (what `F7` runs); `pair claude` still works |
 | `pair stop` | kill the session and any running `say`/`rec` |
 | `pair replay [<id or name>] [--speed N] [--mute] [--no-nvim]` | play a session back: narrations spoken, jumps replayed |
+| `pair captions [<id or name>] [--srt\|--vtt] [--out file]` | the spoken words of a session as subtitles, timed from its events, for a demo clip |
 | `pair log [--follow] [<id or name>]` | a session as a conversation; this is what the activity column runs |
 | `pair presence` | the animated state indicator; this is what the top right panel runs |
 | `pair mcp` | the MCP server (run by the agent) |
@@ -325,8 +326,9 @@ Global hotkeys: `brew install --cask hammerspoon`, then add
 - **Events** go to `.pair/events.jsonl` (`{ts, type, payload}`). The
   activity column renders that file as a conversation (`pair log
   --follow`): grouped by speaker, wrapped at word boundaries for the width
-  of the pane, with what you said shown once. A plain-text copy goes to
-  `.pair/session.log`.
+  of the pane, with what you said shown once. At the end of a turn longer
+  than 20 s the "your turn" card says how much of it was speech (`your
+  turn · speech 41%`). A plain-text copy goes to `.pair/session.log`.
 - **Neovim without a config of your own** gets line numbers, mouse support,
   a colourful built-in theme and syntax highlighting. With your own config,
   pair changes none of that.
