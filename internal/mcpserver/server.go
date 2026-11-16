@@ -29,7 +29,8 @@ import (
 )
 
 // MaxChars is the ceiling for narrate, ask and show notes. It is a safety
-// net, not the pacing guard: the CLAUDE.md block asks for under 200.
+// net, not the pacing guard: the pairing instructions ask for about 120, one
+// sentence of about six seconds.
 const MaxChars = 400
 
 // Pointer is the part of the Neovim client show() needs.
@@ -143,7 +144,7 @@ func (s *Server) setState(state, detail string) {
 
 // NarrateInput is the argument of the narrate tool.
 type NarrateInput struct {
-	Text string `json:"text" jsonschema:"What to say aloud: one or two short plain-speech sentences, under 200 characters, no markdown or code"`
+	Text string `json:"text" jsonschema:"What to say aloud: one plain-speech sentence of about six seconds (about 120 characters), a second one only when the why needs it; no markdown or code"`
 }
 
 // ShowInput is the argument of the show tool.
@@ -151,12 +152,12 @@ type ShowInput struct {
 	File      string `json:"file" jsonschema:"Path of the file to point at, absolute or relative to the repository root"`
 	StartLine int    `json:"start_line" jsonschema:"First line to highlight, 1-based"`
 	EndLine   int    `json:"end_line,omitempty" jsonschema:"Last line to highlight, 1-based; defaults to start_line"`
-	Note      string `json:"note,omitempty" jsonschema:"Optional short sentence spoken aloud while pointing"`
+	Note      string `json:"note,omitempty" jsonschema:"Optional sentence spoken aloud while pointing: about six seconds of speech at most"`
 }
 
 // AskInput is the argument of the ask tool.
 type AskInput struct {
-	Question string `json:"question" jsonschema:"The question to ask aloud: one decision, recommended option first, under 200 characters"`
+	Question string `json:"question" jsonschema:"The question to ask aloud: one decision, recommended option first, about six seconds of speech (about 120 characters)"`
 }
 
 // MCP builds the SDK server with the tools registered.
@@ -164,15 +165,15 @@ func (s *Server) MCP() *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "pair", Version: s.Version}, nil)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "narrate",
-		Description: "Speak aloud to the engineer you are pairing with, before a change: what you are changing and why. Blocks until the sentence has been spoken. Plain speech in the session language, no markdown, no code. Max 400 characters, aim under 200.",
+		Description: "Speak aloud to the engineer you are pairing with, before a change: what you are changing and why. Blocks until the sentence has been spoken. Plain speech in the session language, no markdown, no code. One sentence of about six seconds of speech: aim at 120 characters, never over 400.",
 	}, s.narrate)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "show",
-		Description: "Point at code in the engineer's Neovim without editing: jumps to the file and highlights start_line to end_line. An optional note is spoken aloud. Use it before discussing or changing a range.",
+		Description: "Point at code in the engineer's Neovim without editing: jumps to the file and highlights start_line to end_line. An optional note is spoken aloud: one sentence, about six seconds of speech (aim at 120 characters). Use it before discussing or changing a range.",
 	}, s.show)
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "ask",
-		Description: "Ask the engineer one question aloud and wait for the spoken answer: the engineer opens the microphone, answers, and the transcript is returned (or \"(no answer)\" when nobody answers). One question per decision point, recommended option first, under 200 characters. Record the answer in .pair/PAIRING.md under Decisions.",
+		Description: "Ask the engineer one question aloud and wait for the spoken answer: the engineer opens the microphone, answers, and the transcript is returned (or \"(no answer)\" when nobody answers). One question per decision point, recommended option first, about six seconds of speech: aim at 120 characters, never over 400. Record the answer in .pair/PAIRING.md under Decisions.",
 	}, s.ask)
 	return srv
 }
@@ -374,7 +375,7 @@ func checkLength(what, s string) error {
 		return fmt.Errorf("%s: text is empty", what)
 	}
 	if n > MaxChars {
-		return fmt.Errorf("%s: text is %d characters; keep it under %d (aim under 200: one or two short sentences) and call again with a shorter version", what, n, MaxChars)
+		return fmt.Errorf("%s: text is %d characters; keep it under %d (aim at 120: one sentence, about six seconds of speech) and call again with a shorter version", what, n, MaxChars)
 	}
 	return nil
 }
