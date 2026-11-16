@@ -104,8 +104,8 @@ above the fold.
 
 | Channel | What it takes | Note |
 | --- | --- | --- |
-| Claude Code plugin | pair already runs on hooks, MCP and SessionStart; a `.claude-plugin/marketplace.json` in a public repo gives `/plugin install pair --marketplace fabioaraujo121/pair` | one install line; 532 plugins listed, none voice |
-| `pair.nvim` as its own repo | split the plugin out; dotfyle and awesome-neovim need an OSS plugin repo at least a week old | precedent: claudecode.nvim drives a closed binary |
+| Claude Code plugin | done: `.claude-plugin/` in the repo, `/plugin install pair --marketplace fabioaraujo121/pair` adds `/pair:start`; the directory at claude.ai/directory/manage wants an icon and a paid plan | one install line; 532 plugins listed, none voice |
+| `pair.nvim` as its own repo | done: github.com/fabioaraujo121/pair.nvim, history from 2026-09-25; dotfyle and awesome-neovim need an OSS plugin repo at least a week old | precedent: claudecode.nvim drives a closed binary |
 | Show HN | Sunday 21:00 BRT (Monday 00:00 UTC), title "Show HN: Pair – your coding agent narrates, points at code in Neovim, and listens (local, macOS)", a raw voiceover demo, no music, no logos; stay three hours | median Show HN is 2 points; stars arrive at ~1.4 per upvote |
 | r/ClaudeCode (483k), r/commandline, r/macapps, #neovim Matrix | a 10 s GIF and "what I built" | r/neovim needs two months of visible commit history and an AI disclosure |
 | awesome-claude-code | issue form; 14 days public with active development, or 100 stars | submit on day 15 |
@@ -121,9 +121,12 @@ narration, ask as a tool result, hand-edit diffs, offline, replayable.
 
 ## The 30 days
 
-- **Days 1 to 7, assets.** Source opened on 2026-11-16 (MIT, full
-  history, scanned for secrets first). Split `pair.nvim`, add the plugin
-  manifest. Ship fixes 1, 2, 3, 4 and 8 above. Record the demo.
+- **Days 1 to 7, assets.** Done on 2026-11-16: source opened (MIT, full
+  history, scanned for secrets first); `pair.nvim` split out with its
+  history (github.com/fabioaraujo121/pair.nvim, mirrored by the nvim
+  workflow); the Claude Code plugin manifest (`/plugin install pair
+  --marketplace fabioaraujo121/pair`, the `/pair:start` skill). Ship fixes
+  1, 2, 3, 4 and 8 above. Record the demo (script in DEMO.md).
 - **Days 8 to 13, seed.** r/ClaudeCode, r/commandline, #neovim Matrix,
   dotfyle, awesome-neovim, a Lobsters invite. Fix what the first strangers
   trip on.
