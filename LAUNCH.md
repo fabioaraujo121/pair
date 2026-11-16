@@ -121,10 +121,9 @@ narration, ask as a tool result, hand-edit diffs, offline, replayable.
 
 ## The 30 days
 
-- **Days 1 to 7, assets.** Decide on open source; if yes, review the
-  history for anything private, open `fabioaraujo121/pair` under MIT with
-  full history, split `pair.nvim`, add the plugin manifest. Ship fixes 1,
-  2, 3, 4 and 8 above. Record the demo.
+- **Days 1 to 7, assets.** Source opened on 2026-11-16 (MIT, full
+  history, scanned for secrets first). Split `pair.nvim`, add the plugin
+  manifest. Ship fixes 1, 2, 3, 4 and 8 above. Record the demo.
 - **Days 8 to 13, seed.** r/ClaudeCode, r/commandline, #neovim Matrix,
   dotfyle, awesome-neovim, a Lobsters invite. Fix what the first strangers
   trip on.
@@ -140,8 +139,8 @@ narration, ask as a tool result, hand-edit diffs, offline, replayable.
   all broke out on a second to fourth post, by someone else.
 
 Three mistakes that sink it: launching as "voice for Claude Code"; a silent
-demo or a produced one with music; friction plus secrecy (a 1.6 GB model,
-`brew trust`, a private repo) that turns the thread into "here is the
+demo or a produced one with music; friction (a 1.6 GB model, `brew trust`,
+an unsigned binary) that turns the thread into "here is the
 open-source clone".
 
 ## Sources

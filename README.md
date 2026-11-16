@@ -484,14 +484,14 @@ PAIR_REAL_AUDIO=1 go test ./internal/speech/
 
 ## Releasing
 
-The source is private; the releases are public. A tag push runs
-`.github/workflows/release.yml`: the tests, then goreleaser, which builds
-the darwin arm64 and amd64 archives, creates the release in
+A tag push runs `.github/workflows/release.yml`: the tests, then
+goreleaser, which builds the darwin arm64 and amd64 archives, creates the
+release in
 [`fabioaraujo121/pair-releases`](https://github.com/fabioaraujo121/pair-releases)
 and pushes the cask to
 [`fabioaraujo121/homebrew-tap`](https://github.com/fabioaraujo121/homebrew-tap).
-Both are public; this repository is not, and its commit log is not
-published with the release.
+The releases have their own repository from the time the source was
+private; the cask and the site point there, so they stay.
 
 One-time setup: a fine-grained personal access token with "Contents: read
 and write" on those two repositories only, saved in this repository as the
